@@ -4,25 +4,25 @@ export class RegisterUserDto {
     email: string;
     password: string;
 
-//   name?: string;
+  name?: string;
 
-//   lastName?: string;
+  lastName?: string;
 
-//   phoneNumber?: string;
+  phoneNumber?: string;
 
-//   address?: string;
+  address?: string;
 
-//   city?: string;
+  city?: string;
 
-//   state?: string;
+  state?: string;
 
-//   zipCode?: string;
+  zipCode?: string;
 
-//   country?: string;
+  country?: string;
 
-//   profilePicture?: string;
+  profilePicture?: string;
 
-//   gender?: string;
+  gender?: string;
 
-//   dob?: Date;
+  dob?: Date;
 }

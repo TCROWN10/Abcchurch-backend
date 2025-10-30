@@ -21,21 +21,23 @@ model User {
   updatedAt DateTime    @updatedAt
   detailsId Int         @unique
   details   UserDetails? @relation(fields: [detailsId], references: [id])
+
+  @@index([email])
 }
 
 model UserDetails {
   id             Int      @id @default(autoincrement())
-  name           String
-  lastName       String
-  phoneNumber    String
-  address        String
-  city           String
-  state          String
-  zipCode        String
-  country        String
-  profilePicture String
-  gender         String
-  dob            DateTime
+  name           String?
+  lastName       String?
+  phoneNumber    String?
+  address        String?
+  city           String?
+  state          String?
+  zipCode        String?
+  country        String?
+  profilePicture String?
+  gender         String?
+  dob            DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   User           User?

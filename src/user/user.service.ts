@@ -1,15 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { IUserService } from './IUserService.interface';
 import { RegisterUserDto } from './dtos/user.dto';
 import * as bcrypt from 'bcrypt';
 
 @Injectable()
-export class UserService implements IUserService {
+export class UserService {
     constructor(private readonly prismaService: PrismaService) {}
 
     async registerUser(userDto: RegisterUserDto): Promise<any> {
-        const { email, password, } = userDto;
+        const { email, password, ...userDetails } = userDto;
         const user = await this.prismaService.user.findUnique({
             where: {
                 email,
@@ -24,11 +23,40 @@ export class UserService implements IUserService {
             data: {
                 email,
                 password: hashedPassword,
+                details: {
+                    create: {
+                        ...userDetails
+                    },
+                },
             },
+            select: {
+                email: true,
+                detailsId: true,
+                id: true,
+                createdAt: true,
+                updatedAt: true
+            }
         });
 
         
         return newUser;
+    }
+
+    async findUserByEmail(email: string) {
+        return await this.prismaService.user.findUnique({
+            where: {
+                email,
+            },
+            select: {
+                password: false,
+                details: true,
+                id: true,
+                createdAt: true,
+                updatedAt: true,
+                email: true,
+                detailsId: true,
+            },
+        });
     }
 
 }
