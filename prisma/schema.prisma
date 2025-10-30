@@ -14,11 +14,29 @@ datasource db {
 }
 
 model User {
-  id Int @id @default(autoincrement())
-  name String
-  lastName String
-  email String @unique
-  password String @db.VarChar(1000)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id        Int         @id @default(autoincrement())
+  email     String      @unique
+  password  String      @db.VarChar(1000)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  detailsId Int         @unique
+  details   UserDetails? @relation(fields: [detailsId], references: [id])
+}
+
+model UserDetails {
+  id             Int      @id @default(autoincrement())
+  name           String
+  lastName       String
+  phoneNumber    String
+  address        String
+  city           String
+  state          String
+  zipCode        String
+  country        String
+  profilePicture String
+  gender         String
+  dob            DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  User           User?
 }
