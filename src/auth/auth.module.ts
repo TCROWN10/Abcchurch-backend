@@ -4,7 +4,6 @@ import { JwtModule } from '@nestjs/jwt';
 import { AuthService } from './auth.service';
 import { UserModule } from 'src/user/user.module';
 import { PassportModule } from '@nestjs/passport';
-import { LocalStrategy } from 'src/strategies/local.strategy';
 import { JwtStrategy } from 'src/strategies/jwt.strategy';
 import { GoogleStrategy } from 'src/strategies/google.strategy';
 
@@ -31,6 +30,6 @@ import { GoogleStrategy } from 'src/strategies/google.strategy';
             inject: [ConfigService],
         }),
     ],
-    providers: [AuthService, LocalStrategy, JwtStrategy, GoogleStrategy]
+    providers: [AuthService, JwtStrategy, GoogleStrategy]
 })
 export class AuthModule {}

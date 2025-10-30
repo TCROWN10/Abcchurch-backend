@@ -20,3 +20,12 @@ export const zRegisterSchema = z.object({
 });
 
 export type AuthRegisterUserDto = z.infer<typeof zRegisterSchema>;
+
+export const zLoginSchema = z.object({
+    email: email({error: 'not a valid email pattern'}),
+    password: z.string()
+    .regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/)
+    .min(6, 'password must be at least 6 characters long'),
+});
+
+export type AuthLoginUserDto = z.infer<typeof zLoginSchema>;

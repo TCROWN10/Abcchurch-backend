@@ -59,4 +59,24 @@ export class UserService {
         });
     }
 
+    async findUserAndCompareCredential(email: string, password: string) {
+        try{
+            const user = await this.prismaService.user.findUniqueOrThrow({
+                where: {
+                    email,
+                },
+            });
+            if (!user) {
+                throw new Error('User not found');
+            }
+            const isPasswordValid = await bcrypt.compare(password, user.password);
+            if (!isPasswordValid) {
+                // throw new Error('Invalid password');
+            }
+            return user;
+        }catch(error){
+            throw error;
+        }
+    }
+
 }
