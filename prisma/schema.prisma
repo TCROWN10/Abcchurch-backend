@@ -13,12 +13,19 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum UserRole {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
 model User {
   id              Int          @id @default(autoincrement())
   email           String       @unique
   password        String?      @db.VarChar(1000)
   googleId        String?      @unique
   isEmailVerified Boolean      @default(false)
+  role            UserRole     @default(USER)
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
   detailsId       Int          @unique
@@ -26,6 +33,7 @@ model User {
 
   @@index([email])
   @@index([googleId])
+  @@index([role])
 }
 
 model UserDetails {

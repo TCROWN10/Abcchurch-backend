@@ -1,11 +1,9 @@
-import { Body, Controller, Get, HttpCode, Post, Req, Res, UseGuards, UsePipes } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, Req, UseGuards, UsePipes } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { type AuthLoginUserDto, type AuthRegisterUserDto, zLoginSchema, zRegisterSchema } from './dtos/auth.dto';
 import { ZodPipe } from 'src/pipes/zod/zod.pipe';
 import { buildAppResponse } from 'src/utils/app_response.utils';
 import { AuthGuard } from '@nestjs/passport';
-import { GoogleGuard } from 'src/guards/google.guard';
-import  { type Response }  from 'express';
 
 @Controller('auth')
 export class AuthController {
@@ -26,23 +24,23 @@ export class AuthController {
         return buildAppResponse(await this.authService.login(userDto), 'User logged in successfully', 200, '/api/auth/login');
     }
 
-    @Get('google')
-    @UseGuards(GoogleGuard)
-    async googleAuth() {
-        // This will redirect to Google's OAuth page
-        return;
-    }
+    // @Get('google')
+    // @UseGuards(GoogleGuard)
+    // async googleAuth() {
+    //     // This will redirect to Google's OAuth page
+    //     return;
+    // }
 
-    @Get('google/callback')
-    @UseGuards(GoogleGuard)
-    async googleAuthCallback(@Req() req: any, @Res() res: Response) {
-        // Successful authentication, redirect or send token
-        const { _, token } = req.user;
+    // @Get('google/callback')
+    // @UseGuards(GoogleGuard)
+    // async googleAuthCallback(@Req() req: any, @Res() res: Response) {
+    //     // Successful authentication, redirect or send token
+    //     const { _, token } = req.user;
         
-        // Redirect to frontend with token
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-        res.redirect(`${frontendUrl}/auth/callback?token=${token}`);
-    }
+    //     // Redirect to frontend with token
+    //     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    //     res.redirect(`${frontendUrl}/auth/callback?token=${token}`);
+    // }
 
     @Get('profile')
     @UseGuards(AuthGuard('jwt'))

@@ -1,9 +1,11 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Req } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { PassportStrategy } from "@nestjs/passport";
 import { Profile, Strategy } from "passport-google-oauth20";
 import { UserService } from "src/user/user.service";
 import { AuthService } from "src/auth/auth.service";
+import { type Request } from "express";
+import { UserRole } from "@prisma/client";
 
 @Injectable()
 export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
@@ -34,6 +36,7 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
             
             // Check if user exists
             let user = await this.userService.findUserByEmail(email);
+
             
             if (!user) {
                 // Create new user if doesn't exist
@@ -43,6 +46,7 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
                     lastName,
                     picture,
                     googleId: profile.id,
+                    role: this.getRqPath(request)
                 });
             } else if (!user.googleId) {
                 // Update existing user with Google ID if not set
@@ -65,5 +69,17 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
             console.error('Google OAuth error:', error);
             done(error, false);
         }
+    }
+
+    private getRqPath(@Req() req: Request): UserRole {
+        const path = req.originalUrl;
+        if (path === '/api/auth/google') {
+            return UserRole.USER;
+        } else if (path === '/api/auth/google/admin') {
+            return UserRole.ADMIN;
+        } else if (path === '/api/auth/google/super-admin') {
+            return UserRole.SUPER_ADMIN;
+        }
+        return UserRole.USER;
     }
 }

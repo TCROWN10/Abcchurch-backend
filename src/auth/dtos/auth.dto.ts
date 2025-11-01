@@ -1,4 +1,5 @@
 import z, { email } from "zod";
+import { UserRole } from '@prisma/client';
 
 
 export const zRegisterSchema = z.object({
@@ -6,6 +7,7 @@ export const zRegisterSchema = z.object({
     password: z.string()
     // .regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/)
     .min(6, 'password must be at least 6 characters long'),
+    role: z.enum(UserRole).default(UserRole.USER).optional(),
     name: z.string().min(3, 'name must be at least 3 characters long').optional(),
     lastName: z.string().min(3, 'last name must be at least 3 characters long').optional(),
     phoneNumber: z.string().min(10, 'phone number must be at least 10 characters long').optional(),

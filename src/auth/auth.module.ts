@@ -4,9 +4,11 @@ import { JwtModule } from '@nestjs/jwt';
 import { AuthService } from './auth.service';
 import { UserModule } from 'src/user/user.module';
 import { PassportModule } from '@nestjs/passport';
-import { JwtStrategy } from 'src/strategies/jwt.strategy';
+import { JwtStrategy, } from 'src/strategies/jwt.strategy';
 import { GoogleStrategy } from 'src/strategies/google.strategy';
 import { AuthController } from './auth.controller';
+import { Reflector } from '@nestjs/core';
+import { GoogleAuthController } from './google_auth.controller';
 
 @Module({
     imports: [
@@ -17,7 +19,7 @@ import { AuthController } from './auth.controller';
                 session: false,
             }),
         }),
-
+        Reflector,
         JwtModule.registerAsync({
             imports: [ConfigModule],
             useFactory: async (configService: ConfigService) => ({
@@ -32,6 +34,6 @@ import { AuthController } from './auth.controller';
         }),
     ],
     providers: [AuthService, JwtStrategy, GoogleStrategy],
-    controllers: [AuthController]
+    controllers: [AuthController, GoogleAuthController]
 })
 export class AuthModule {}

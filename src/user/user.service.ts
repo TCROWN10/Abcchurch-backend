@@ -1,46 +1,44 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, User } from '@prisma/client';
+import { Prisma, User, UserRole } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { RegisterUserDto } from './dtos/user.dto';
 import * as bcrypt from 'bcrypt';
+
+type UserWithDetails = Prisma.UserGetPayload<{
+    include: { details: true; createdBy?: boolean; createdUsers?: boolean }
+}>;
 
 @Injectable()
 export class UserService {
     constructor(private readonly prismaService: PrismaService) {}
 
-    async registerUser(userDto: RegisterUserDto): Promise<any> {
-        const { email, password, ...userDetails } = userDto;
-        const user = await this.prismaService.user.findUnique({
-            where: {
-                email,
-            },
+    async registerUser(userDto: RegisterUserDto ) {
+        const { email, password, role = UserRole.USER, ...userDetails } = userDto;
+        
+        const existingUser = await this.prismaService.user.findUnique({
+            where: { email },
         });
-        if (user) {
+        
+        if (existingUser) {
             throw new Error('User already exists');
         }
-        const hashedPassword = await bcrypt.hash(password, 10);
 
-        const newUser = await this.prismaService.user.create({
+        const hashedPassword = password ? await bcrypt.hash(password, 10) : null;
+
+        return this.prismaService.user.create({
             data: {
                 email,
                 password: hashedPassword,
+                role,
                 details: {
                     create: {
-                        ...userDetails
+                        name: userDetails.name,
+                        lastName: userDetails.lastName,
                     },
                 },
             },
-            select: {
-                email: true,
-                detailsId: true,
-                id: true,
-                createdAt: true,
-                updatedAt: true
-            }
+            include: { details: true },
         });
-
-        
-        return newUser;
     }
 
     async findUserByEmail(email: string) {
@@ -82,6 +80,7 @@ export class UserService {
         lastName: string;
         picture?: string | null;
         googleId: string;
+        role?: UserRole;
     }) {
         return this.prismaService.user.create({
             data: {

@@ -1,8 +1,10 @@
+import { UserRole } from "@prisma/client";
 
 
 export class RegisterUserDto {
     email: string;
     password: string;
+    role?: UserRole;
 
   name?: string;
 
