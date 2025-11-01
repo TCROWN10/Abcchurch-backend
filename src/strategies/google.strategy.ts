@@ -14,6 +14,7 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
         private readonly userService: UserService,
         private readonly authService: AuthService
     ) {
+        console.log('GoogleStrategy constructor');
         super({
             clientID: configService.getOrThrow('GOOGLE_CLIENT_ID'),
             clientSecret: configService.getOrThrow('GOOGLE_CLIENT_SECRET'),
@@ -23,8 +24,9 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
         });
     }
 
-    async validate(request: any, accessToken: string, refreshToken: string, profile: Profile, done: Function) {
+    async validate(request: Request, accessToken: string, refreshToken: string, profile: Profile, done: Function) {
         try {
+            console.log('GoogleStrategy validate');
             if (!profile.emails?.[0]?.value) {
                 throw new Error('No email provided by Google');
             }
@@ -36,8 +38,9 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
             
             // Check if user exists
             let user = await this.userService.findUserByEmail(email);
+            console.log("user", user);
 
-            
+            console.log("this.getRqPath(request)", this.getRqPath(request));
             if (!user) {
                 // Create new user if doesn't exist
                 user = await this.userService.createUserFromGoogle({
@@ -48,9 +51,11 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
                     googleId: profile.id,
                     role: this.getRqPath(request)
                 });
+                console.log("new user", user);
             } else if (!user.googleId) {
                 // Update existing user with Google ID if not set
                 user = await this.userService.updateUserGoogleId(user.id, profile.id);
+                console.log("updated user", user);
             }
             
             if (!user) {
@@ -63,7 +68,7 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
                 email: user.email,
                 details: user.details
             });
-            
+            console.log("token", token);
             done(null, { user, token });
         } catch (error) {
             console.error('Google OAuth error:', error);
@@ -71,15 +76,12 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
         }
     }
 
-    private getRqPath(@Req() req: Request): UserRole {
+    private getRqPath(req: Request): UserRole {
+        console.log("getRqPath", req);
         const path = req.originalUrl;
-        if (path === '/api/auth/google') {
-            return UserRole.USER;
-        } else if (path === '/api/auth/google/admin') {
-            return UserRole.ADMIN;
-        } else if (path === '/api/auth/google/super-admin') {
-            return UserRole.SUPER_ADMIN;
-        }
+        if (path === '/api/auth/google') return UserRole.USER;
+        if (path === '/api/auth/google/admin') return UserRole.ADMIN;
+        if (path === '/api/auth/google/super-admin') return UserRole.SUPER_ADMIN;
         return UserRole.USER;
     }
 }

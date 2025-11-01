@@ -43,8 +43,9 @@ export class AuthController {
     // }
 
     @Get('profile')
-    @UseGuards(AuthGuard('jwt'))
+    // @UseGuards(AuthGuard('jwt'))
     getProfile(@Req() req: any) {
+        console.log('profile');
         return buildAppResponse(
             req.user, 
             'User profile retrieved successfully', 

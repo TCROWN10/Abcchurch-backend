@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
 import { User, UserRole } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { RegisterUserDto } from './dtos/user.dto';
 import * as bcrypt from 'bcrypt';
+import { BaseError } from 'src/exceptions/base_error.exception';
 
 
 @Injectable()
@@ -10,14 +11,14 @@ export class UserService {
     constructor(private readonly prismaService: PrismaService) {}
 
     async registerUser(userDto: RegisterUserDto ) {
-        const { email, password, role = UserRole.USER, ...userDetails } = userDto;
+        const { email, password, role, ...userDetails } = userDto;
         
         const existingUser = await this.prismaService.user.findUnique({
             where: { email },
         });
         
         if (existingUser) {
-            throw new Error('User already exists');
+            throw new BaseError('User already exists', HttpStatus.CONFLICT);
         }
 
         const hashedPassword = password ? await bcrypt.hash(password, 10) : null;
@@ -26,7 +27,7 @@ export class UserService {
             data: {
                 email,
                 password: hashedPassword,
-                role,
+                role: role ?? UserRole.USER,
                 details: {
                     create: {
                         name: userDetails.name,
@@ -34,6 +35,7 @@ export class UserService {
                     },
                 },
             },
+            omit: { password: true },
             include: { details: true },
         });
     }
@@ -41,6 +43,7 @@ export class UserService {
     async findUserByEmail(email: string) {
         return this.prismaService.user.findUnique({
             where: { email },
+            omit: { password: true },
             include: { details: true }
         });
     }
@@ -92,9 +95,10 @@ export class UserService {
                     },
                 },
             },
+            omit: { password: true },
             include: {
                 details: true,
             },
-        });
+        })
     }
 }

@@ -1,6 +1,7 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
 import { buildErrorResponse, ErrorResponse } from './error_reponse.error';
 import { buildAppResponse } from 'src/utils/app_response.utils';
+import { BaseError } from '../base_error.exception';
 
 @Catch()
 export class GlobalExceptionFilter<T> implements ExceptionFilter {
@@ -12,6 +13,10 @@ export class GlobalExceptionFilter<T> implements ExceptionFilter {
     let status: number;
     
     if (exception instanceof HttpException) {
+      message = exception.message;
+      status = exception.getStatus();
+    } 
+    else if (exception instanceof BaseError) {
       message = exception.message;
       status = exception.getStatus();
     } else {

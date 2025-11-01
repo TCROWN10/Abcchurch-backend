@@ -4,17 +4,17 @@ import { AuthGuard } from "@nestjs/passport";
 @Injectable()
 export class GoogleGuard extends AuthGuard('google') {
     constructor() {
+        // super('google');
         super({
-            accessType: 'offline',
-            prompt: 'consent',
+            // passReqToCallback: true,
+            // session: false,
         });
     }
 
     async canActivate(context: ExecutionContext): Promise<boolean> {
         try {
+            console.log('GoogleGuard canActivate');
             const activate = (await super.canActivate(context)) as boolean;
-            const request = context.switchToHttp().getRequest();
-            await super.logIn(request);
             return activate;
         } catch (error) {
             console.error('Google OAuth error:', error);
@@ -26,6 +26,7 @@ export class GoogleGuard extends AuthGuard('google') {
         if (err || !user) {
             throw err || new Error('Authentication failed');
         }
+        console.log('GoogleGuard handleRequest');
         return user;
     }
 }
