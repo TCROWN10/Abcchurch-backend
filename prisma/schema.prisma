@@ -14,15 +14,18 @@ datasource db {
 }
 
 model User {
-  id        Int         @id @default(autoincrement())
-  email     String      @unique
-  password  String      @db.VarChar(1000)
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
-  detailsId Int         @unique
-  details   UserDetails? @relation(fields: [detailsId], references: [id])
+  id              Int          @id @default(autoincrement())
+  email           String       @unique
+  password        String?      @db.VarChar(1000)
+  googleId        String?      @unique
+  isEmailVerified Boolean      @default(false)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  detailsId       Int          @unique
+  details         UserDetails? @relation(fields: [detailsId], references: [id])
 
   @@index([email])
+  @@index([googleId])
 }
 
 model UserDetails {

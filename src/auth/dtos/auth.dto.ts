@@ -4,7 +4,7 @@ import z, { email } from "zod";
 export const zRegisterSchema = z.object({
     email: email({error: 'not a valid email pattern'}),
     password: z.string()
-    .regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/)
+    // .regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/)
     .min(6, 'password must be at least 6 characters long'),
     name: z.string().min(3, 'name must be at least 3 characters long').optional(),
     lastName: z.string().min(3, 'last name must be at least 3 characters long').optional(),
@@ -24,7 +24,7 @@ export type AuthRegisterUserDto = z.infer<typeof zRegisterSchema>;
 export const zLoginSchema = z.object({
     email: email({error: 'not a valid email pattern'}),
     password: z.string()
-    .regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/)
+    // .regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/)
     .min(6, 'password must be at least 6 characters long'),
 });
 

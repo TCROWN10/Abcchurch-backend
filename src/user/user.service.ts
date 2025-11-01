@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma, User } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { RegisterUserDto } from './dtos/user.dto';
 import * as bcrypt from 'bcrypt';
@@ -43,40 +44,61 @@ export class UserService {
     }
 
     async findUserByEmail(email: string) {
-        return await this.prismaService.user.findUnique({
-            where: {
-                email,
-            },
-            select: {
-                password: false,
-                details: true,
-                id: true,
-                createdAt: true,
-                updatedAt: true,
-                email: true,
-                detailsId: true,
-            },
+        return this.prismaService.user.findUnique({
+            where: { email },
+            include: { details: true }
         });
     }
 
-    async findUserAndCompareCredential(email: string, password: string) {
-        try{
-            const user = await this.prismaService.user.findUniqueOrThrow({
-                where: {
-                    email,
-                },
-            });
-            if (!user) {
-                throw new Error('User not found');
+    async updateUserGoogleId(userId: number, googleId: string) {
+        return this.prismaService.user.update({
+            where: { id: userId },
+            data: { 
+                googleId: googleId as any,
+                isEmailVerified: true 
+            },
+            include: { 
+                details: true 
             }
-            const isPasswordValid = await bcrypt.compare(password, user.password);
-            if (!isPasswordValid) {
-                // throw new Error('Invalid password');
-            }
-            return user;
-        }catch(error){
-            throw error;
-        }
+        });
     }
 
+    async findUserAndCompareCredential(email: string, password: string): Promise<User | null> {
+        const user = await this.prismaService.user.findUnique({
+            where: { email }
+        });
+
+        if (!user) {
+            return null;
+        }
+
+        const isPasswordValid = await bcrypt.compare(password, user.password || '');
+        return isPasswordValid ? user : null;
+    }
+
+    async createUserFromGoogle(profile: {
+        email: string;
+        firstName: string;
+        lastName: string;
+        picture?: string | null;
+        googleId: string;
+    }) {
+        return this.prismaService.user.create({
+            data: {
+                email: profile.email,
+                googleId: profile.googleId as any,
+                isEmailVerified: true,
+                details: {
+                    create: {
+                        name: profile.firstName,
+                        lastName: profile.lastName,
+                        profilePicture: profile.picture || null,
+                    },
+                },
+            },
+            include: {
+                details: true,
+            },
+        });
+    }
 }
