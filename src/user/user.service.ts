@@ -1,12 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, User, UserRole } from '@prisma/client';
+import { User, UserRole } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { RegisterUserDto } from './dtos/user.dto';
 import * as bcrypt from 'bcrypt';
 
-type UserWithDetails = Prisma.UserGetPayload<{
-    include: { details: true; createdBy?: boolean; createdUsers?: boolean }
-}>;
 
 @Injectable()
 export class UserService {
