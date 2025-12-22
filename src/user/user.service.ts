@@ -48,6 +48,14 @@ export class UserService {
         });
     }
 
+    async findUserByGoogleId(googleId: string) {
+        return this.prismaService.user.findUnique({
+            where: { googleId },
+            omit: { password: true },
+            include: { details: true }
+        });
+    }
+
     async updateUserGoogleId(userId: number, googleId: string) {
         return this.prismaService.user.update({
             where: { id: userId },
@@ -87,6 +95,7 @@ export class UserService {
                 email: profile.email,
                 googleId: profile.googleId as any,
                 isEmailVerified: true,
+                role: profile.role ?? UserRole.USER,
                 details: {
                     create: {
                         name: profile.firstName,
@@ -100,5 +109,92 @@ export class UserService {
                 details: true,
             },
         })
+    }
+
+    async findUserById(id: number) {
+        return this.prismaService.user.findUnique({
+            where: { id },
+            omit: { password: true },
+            include: { details: true },
+        });
+    }
+
+    async updateUser(id: number, data: {
+        email?: string;
+        role?: UserRole;
+        isEmailVerified?: boolean;
+    }) {
+        return this.prismaService.user.update({
+            where: { id },
+            data,
+            omit: { password: true },
+            include: { details: true },
+        });
+    }
+
+    async updateUserDetails(userId: number, details: {
+        name?: string;
+        lastName?: string;
+        phoneNumber?: string;
+        address?: string;
+        city?: string;
+        state?: string;
+        zipCode?: string;
+        country?: string;
+        profilePicture?: string;
+        gender?: string;
+        dob?: Date;
+    }) {
+        const user = await this.prismaService.user.findUnique({
+            where: { id: userId },
+            include: { details: true },
+        });
+
+        if (!user) {
+            throw new BaseError('User not found', HttpStatus.NOT_FOUND);
+        }
+
+        if (user.detailsId) {
+            return this.prismaService.userDetails.update({
+                where: { id: user.detailsId },
+                data: details,
+            });
+        } else {
+            const newDetails = await this.prismaService.userDetails.create({
+                data: details,
+            });
+            return this.prismaService.user.update({
+                where: { id: userId },
+                data: { detailsId: newDetails.id },
+                include: { details: true },
+            });
+        }
+    }
+
+    async getAllUsers(filters?: {
+        role?: UserRole;
+        isEmailVerified?: boolean;
+        limit?: number;
+        offset?: number;
+    }) {
+        const where: any = {};
+        if (filters?.role) where.role = filters.role;
+        if (filters?.isEmailVerified !== undefined) where.isEmailVerified = filters.isEmailVerified;
+
+        return this.prismaService.user.findMany({
+            where,
+            omit: { password: true },
+            include: { details: true },
+            take: filters?.limit || 50,
+            skip: filters?.offset || 0,
+            orderBy: { createdAt: 'desc' },
+        });
+    }
+
+    async deleteUser(id: number) {
+        return this.prismaService.user.delete({
+            where: { id },
+            omit: { password: true },
+        });
     }
 }

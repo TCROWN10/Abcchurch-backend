@@ -21,6 +21,8 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
             callbackURL: configService.getOrThrow('GOOGLE_CALLBACK_URL'),
             scope: ['email', 'profile'],
             passReqToCallback: true,
+            // Note: state is handled manually via request.googleAuthRole
+            // We don't use sessions, so we can't use Passport's built-in state management
         });
     }
 
@@ -36,12 +38,18 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
             const lastName = profile.name?.familyName || profile.displayName?.split(' ').slice(1).join(' ') || '';
             const picture = profile.photos?.[0]?.value || null;
             
-            // Check if user exists
-            let user = await this.userService.findUserByEmail(email);
-            console.log("user", user);
+            // Determine role based on request path
+            const role = this.getRqPath(request);
+            console.log("Determined role from path:", role);
 
-            console.log("this.getRqPath(request)", this.getRqPath(request));
-            if (!user) {
+            // Check if user exists by email or googleId
+            let user = await this.userService.findUserByEmail(email);
+            const userByGoogleId = profile.id ? await this.userService.findUserByGoogleId(profile.id) : null;
+            
+            console.log("user by email:", user);
+            console.log("user by googleId:", userByGoogleId);
+
+            if (!user && !userByGoogleId) {
                 // Create new user if doesn't exist
                 user = await this.userService.createUserFromGoogle({
                     email,
@@ -49,39 +57,68 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
                     lastName,
                     picture,
                     googleId: profile.id,
-                    role: this.getRqPath(request)
+                    role: role
                 });
-                console.log("new user", user);
-            } else if (!user.googleId) {
+                console.log("new user created:", user);
+            } else if (user && !user.googleId) {
                 // Update existing user with Google ID if not set
                 user = await this.userService.updateUserGoogleId(user.id, profile.id);
-                console.log("updated user", user);
+                console.log("updated user with googleId:", user);
+            } else if (userByGoogleId && !user) {
+                // User exists with Google ID but different email (shouldn't happen, but handle it)
+                user = userByGoogleId;
+            } else if (user && user.googleId && user.googleId !== profile.id) {
+                // Email matches but Google ID is different - this is a conflict
+                throw new Error('Email is already associated with a different Google account');
             }
             
             if (!user) {
                 throw new Error('Failed to process user');
             }
 
-            // Generate JWT token
-            const token = await this.authService.generateToken({
+            // Generate tokens (access and refresh)
+            const tokens = await this.authService.generateTokens({
                 id: user.id,
                 email: user.email,
                 details: user.details
             });
-            console.log("token", token);
-            done(null, { user, token });
+            console.log("tokens generated successfully");
+            done(null, { user, token: tokens.accessToken, refreshToken: tokens.refreshToken });
         } catch (error) {
             console.error('Google OAuth error:', error);
             done(error, false);
         }
     }
 
-    private getRqPath(req: Request): UserRole {
-        console.log("getRqPath", req);
-        const path = req.originalUrl;
-        if (path === '/api/auth/google') return UserRole.USER;
-        if (path === '/api/auth/google/admin') return UserRole.ADMIN;
-        if (path === '/api/auth/google/super-admin') return UserRole.SUPER_ADMIN;
+    private getRqPath(req: Request & { googleAuthRole?: string }): UserRole {
+        // Check if role was stored in request by the guard
+        if (req.googleAuthRole) {
+            if (req.googleAuthRole === 'super-admin') {
+                return UserRole.SUPER_ADMIN;
+            } else if (req.googleAuthRole === 'admin') {
+                return UserRole.ADMIN;
+            }
+        }
+        
+        // Fallback: Check the state parameter
+        const state = req.query?.state as string;
+        if (state) {
+            if (state.includes('super-admin')) {
+                return UserRole.SUPER_ADMIN;
+            } else if (state.includes('admin')) {
+                return UserRole.ADMIN;
+            }
+        }
+        
+        // Fallback: Check URL path
+        const url = req.originalUrl || req.url || '';
+        if (url.includes('/super-admin')) {
+            return UserRole.SUPER_ADMIN;
+        } else if (url.includes('/admin')) {
+            return UserRole.ADMIN;
+        }
+        
+        // Default to USER role
         return UserRole.USER;
     }
 }

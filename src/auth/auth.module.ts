@@ -9,10 +9,16 @@ import { GoogleStrategy } from 'src/strategies/google.strategy';
 import { AuthController } from './auth.controller';
 import { Reflector } from '@nestjs/core';
 import { GoogleAuthController } from './google_auth.controller';
+import { PrismaModule } from 'src/prisma/prisma.module';
+import { OutboxModule } from 'src/outbox/outbox.module';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 
 @Module({
     imports: [
         UserModule,
+        PrismaModule,
+        OutboxModule,
+        EventEmitterModule,
         PassportModule.registerAsync({
             useFactory: async () => ({
                 defaultStrategy: 'jwt',

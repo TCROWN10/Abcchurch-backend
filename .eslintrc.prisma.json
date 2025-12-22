@@ -1,0 +1,14 @@
+{
+  "rules": {
+    "@typescript-eslint/no-unused-vars": "off"
+  },
+  "overrides": [
+    {
+      "files": ["prisma/schema.prisma"],
+      "rules": {
+        "prisma/url-in-datasource": "off"
+      }
+    }
+  ]
+}
+
