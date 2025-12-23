@@ -1,16 +1,22 @@
 // src/guards/roles.guard.ts
-import { CanActivate, ExecutionContext, ForbiddenException, Injectable, SetMetadata } from '@nestjs/common';
+import { CanActivate, ExecutionContext, ForbiddenException, Injectable, Logger, SetMetadata } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { UserRole } from '@prisma/client';
+import { PrismaService } from 'src/prisma/prisma.service';
 
 export const ROLES_KEY = 'roles';
 export const Roles = (...roles: UserRole[]) => SetMetadata(ROLES_KEY, roles);
 
 @Injectable()
 export class RolesGuard implements CanActivate {
-  constructor(private readonly reflector: Reflector) {}
+  private readonly logger = new Logger(RolesGuard.name);
 
-  canActivate(context: ExecutionContext): boolean {
+  constructor(
+    private readonly reflector: Reflector,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const requiredRoles = this.reflector.getAllAndOverride<UserRole[]>(ROLES_KEY, [
       context.getHandler(),
       context.getClass(),
@@ -25,6 +31,33 @@ export class RolesGuard implements CanActivate {
       throw new ForbiddenException('User not authenticated');
     }
 
-    return requiredRoles.includes(user.role);
+    // If role is missing, fetch from database
+    let userRole = user.role;
+    if (!userRole && user.id) {
+      try {
+        const dbUser = await this.prisma.user.findUnique({
+          where: { id: user.id },
+          select: { role: true },
+        });
+        userRole = dbUser?.role;
+        // Update user object in request for future use
+        user.role = userRole;
+      } catch (error) {
+        this.logger.error(`Failed to fetch user role: ${error.message}`);
+      }
+    }
+
+    if (!userRole) {
+      this.logger.error(`User role not found for user ID: ${user.id}`);
+      throw new ForbiddenException('User role not found in token');
+    }
+
+    const hasRole = requiredRoles.includes(userRole);
+    if (!hasRole) {
+      this.logger.warn(`User role ${userRole} does not match required roles: ${requiredRoles.join(', ')}`);
+      throw new ForbiddenException('Forbidden resource');
+    }
+
+    return true;
   }
 }

@@ -61,17 +61,33 @@ export class AuthService {
     }
 
     async generateToken(user: any) {
+        // Ensure we have the user's role
+        let userRole = user.role;
+        if (!userRole && user.id) {
+            const fullUser = await this.userService.findUserById(user.id);
+            userRole = fullUser?.role;
+        }
+        
         const payload = {
             id: user.id,
             email: user.email,
+            role: userRole || user.role, // Include role in JWT payload
         };
         return this.jwtService.sign(payload);
     }
 
     async generateTokens(user: any) {
+        // Ensure we have the user's role - fetch from DB if not present
+        let userRole = user.role;
+        if (!userRole && user.id) {
+            const fullUser = await this.userService.findUserById(user.id);
+            userRole = fullUser?.role;
+        }
+        
         const payload = {
             id: user.id,
             email: user.email,
+            role: userRole || user.role, // Include role in JWT payload
         };
         
         const accessToken = this.jwtService.sign(payload);
@@ -80,6 +96,7 @@ export class AuthService {
         const refreshTokenPayload = {
             id: user.id,
             email: user.email,
+            role: userRole || user.role, // Include role in refresh token too
             type: 'refresh',
         };
         
@@ -197,9 +214,75 @@ export class AuthService {
         });
 
         // Verify user email
-        await this.prisma.user.update({
+        const updatedUser = await this.prisma.user.update({
             where: { id: userId },
             data: { isEmailVerified: true },
+            include: { details: true },
+        });
+
+        // Send welcome email after successful verification via outbox
+        const userEmail = (await this.userService.findUserById(userId))?.email;
+        if (userEmail) {
+            await this.outboxService.createEvent({
+                eventType: 'email.welcome',
+                payload: {
+                    userId: userId,
+                    email: userEmail,
+                    name: updatedUser.details?.name || 'Friend',
+                },
+            });
+        }
+
+        return { success: true, message: 'Email verified successfully' };
+    }
+
+    async verifyOtpByEmail(email: string, otp: string) {
+        // Find user by email
+        const user = await this.userService.findUserByEmail(email);
+        if (!user) {
+            throw new BadRequestException('User not found with this email');
+        }
+
+        // Find OTP record for this user
+        const otpRecord = await this.prisma.otpCode.findFirst({
+            where: {
+                userId: user.id,
+                code: otp,
+                used: false,
+            },
+            orderBy: { createdAt: 'desc' },
+        });
+
+        if (!otpRecord) {
+            throw new BadRequestException('Invalid OTP code');
+        }
+
+        // Check expiration
+        if (otpRecord.expiresAt < new Date()) {
+            throw new BadRequestException('OTP code has expired. Please request a new one.');
+        }
+
+        // Mark OTP as used
+        await this.prisma.otpCode.update({
+            where: { id: otpRecord.id },
+            data: { used: true },
+        });
+
+        // Verify user email
+        const updatedUser = await this.prisma.user.update({
+            where: { id: user.id },
+            data: { isEmailVerified: true },
+            include: { details: true },
+        });
+
+        // Send welcome email after successful verification via outbox
+        await this.outboxService.createEvent({
+            eventType: 'email.welcome',
+            payload: {
+                userId: user.id,
+                email: user.email,
+                name: updatedUser.details?.name || 'Friend',
+            },
         });
 
         return { success: true, message: 'Email verified successfully' };

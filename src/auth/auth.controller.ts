@@ -17,14 +17,44 @@ export class AuthController {
 
     @Post()
     @HttpCode(201)
-    @ApiOperation({ summary: 'Register a new user', description: 'Create a new user account with email and password' })
+    @ApiOperation({ summary: 'Register a new user', description: 'Create a new user account with email and password (default role: USER)' })
     @ApiBody({ description: 'User registration data', schema: { example: { email: 'user@example.com', password: 'password123', name: 'John', lastName: 'Doe' } } })
     @ApiResponse({ status: 201, description: 'User successfully registered' })
     @ApiResponse({ status: 409, description: 'User already exists' })
     @ApiResponse({ status: 400, description: 'Invalid input data' })
     @UsePipes(new ZodPipe(zRegisterSchema))
     async registerUser(@Body() userDto: AuthRegisterUserDto) {
-        return buildAppResponse(await this.authService.registerUser(userDto), 'User registered successfully', 201, '/api/auth');
+        // Ensure role is USER for regular registration
+        const userData = { ...userDto, role: 'USER' as const };
+        return buildAppResponse(await this.authService.registerUser(userData), 'User registered successfully', 201, '/api/auth');
+    }
+
+    @Post('admin')
+    @HttpCode(201)
+    @ApiOperation({ summary: 'Register a new admin', description: 'Create a new admin account with email and password. Requires super admin privileges or special setup.' })
+    @ApiBody({ description: 'Admin registration data', schema: { example: { email: 'admin@example.com', password: 'password123', name: 'Admin', lastName: 'User' } } })
+    @ApiResponse({ status: 201, description: 'Admin successfully registered' })
+    @ApiResponse({ status: 409, description: 'User already exists' })
+    @ApiResponse({ status: 400, description: 'Invalid input data' })
+    @UsePipes(new ZodPipe(zRegisterSchema))
+    async registerAdmin(@Body() userDto: AuthRegisterUserDto) {
+        // Set role to ADMIN
+        const userData = { ...userDto, role: 'ADMIN' as const };
+        return buildAppResponse(await this.authService.registerUser(userData), 'Admin registered successfully', 201, '/api/auth/admin');
+    }
+
+    @Post('super-admin')
+    @HttpCode(201)
+    @ApiOperation({ summary: 'Register a new super admin', description: 'Create a new super admin account with email and password. Requires special setup or first super admin creation.' })
+    @ApiBody({ description: 'Super admin registration data', schema: { example: { email: 'superadmin@example.com', password: 'password123', name: 'Super', lastName: 'Admin' } } })
+    @ApiResponse({ status: 201, description: 'Super admin successfully registered' })
+    @ApiResponse({ status: 409, description: 'User already exists' })
+    @ApiResponse({ status: 400, description: 'Invalid input data' })
+    @UsePipes(new ZodPipe(zRegisterSchema))
+    async registerSuperAdmin(@Body() userDto: AuthRegisterUserDto) {
+        // Set role to SUPER_ADMIN
+        const userData = { ...userDto, role: 'SUPER_ADMIN' as const };
+        return buildAppResponse(await this.authService.registerUser(userData), 'Super admin registered successfully', 201, '/api/auth/super-admin');
     }
 
     @Post('login')
@@ -58,16 +88,13 @@ export class AuthController {
 
     @Post('verify-otp')
     @HttpCode(200)
-    @UseGuards(JwtGuard)
-    @ApiBearerAuth('JWT-auth')
-    @ApiOperation({ summary: 'Verify OTP code', description: 'Verify the OTP code sent to user email for email verification' })
-    @ApiBody({ schema: { example: { otp: '123456' } } })
+    @ApiOperation({ summary: 'Verify OTP code', description: 'Verify the OTP code sent to user email. No authentication required - provide email and OTP code.' })
+    @ApiBody({ schema: { example: { email: 'user@example.com', otp: '123456' } } })
     @ApiResponse({ status: 200, description: 'Email verified successfully' })
     @ApiResponse({ status: 400, description: 'Invalid or expired OTP' })
-    @ApiResponse({ status: 401, description: 'Unauthorized' })
-    async verifyOtp(@Req() req: any, @Body() body: { otp: string }) {
+    async verifyOtp(@Body() body: { email: string; otp: string }) {
         return buildAppResponse(
-            await this.authService.verifyOtp(req.user.id, body.otp),
+            await this.authService.verifyOtpByEmail(body.email, body.otp),
             'Email verified successfully',
             200,
             '/api/auth/verify-otp',

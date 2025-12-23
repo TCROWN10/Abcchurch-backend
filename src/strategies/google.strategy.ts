@@ -1,4 +1,4 @@
-import { Injectable, Req } from "@nestjs/common";
+import { Injectable, Req, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { PassportStrategy } from "@nestjs/passport";
 import { Profile, Strategy } from "passport-google-oauth20";
@@ -9,26 +9,42 @@ import { UserRole } from "@prisma/client";
 
 @Injectable()
 export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
+    private readonly logger = new Logger(GoogleStrategy.name);
+    
     constructor(
         private readonly configService: ConfigService,
         private readonly userService: UserService,
         private readonly authService: AuthService
     ) {
-        console.log('GoogleStrategy constructor');
+        const callbackURL = configService.getOrThrow('GOOGLE_CALLBACK_URL');
+        const clientID = configService.getOrThrow('GOOGLE_CLIENT_ID');
+        
+        // Log before super() since we can't use this.logger before super()
+        console.log('=== GoogleStrategy Initialization ===');
+        console.log(`Callback URL: ${callbackURL}`);
+        console.log(`Client ID: ${clientID}`);
+        console.log('=====================================');
+        
         super({
-            clientID: configService.getOrThrow('GOOGLE_CLIENT_ID'),
+            clientID: clientID,
             clientSecret: configService.getOrThrow('GOOGLE_CLIENT_SECRET'),
-            callbackURL: configService.getOrThrow('GOOGLE_CALLBACK_URL'),
+            callbackURL: callbackURL,
             scope: ['email', 'profile'],
             passReqToCallback: true,
             // Note: state is handled manually via request.googleAuthRole
             // We don't use sessions, so we can't use Passport's built-in state management
         });
+        
+        // Now we can use this.logger after super()
+        this.logger.log('GoogleStrategy initialized successfully');
     }
 
     async validate(request: Request, accessToken: string, refreshToken: string, profile: Profile, done: Function) {
         try {
-            console.log('GoogleStrategy validate');
+            this.logger.log('=== Google OAuth Validate Called ===');
+            this.logger.log(`Profile ID: ${profile.id}`);
+            this.logger.log(`Profile Email: ${profile.emails?.[0]?.value}`);
+            this.logger.log(`Profile Name: ${profile.name?.givenName} ${profile.name?.familyName}`);
             if (!profile.emails?.[0]?.value) {
                 throw new Error('No email provided by Google');
             }
@@ -82,10 +98,29 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
                 email: user.email,
                 details: user.details
             });
-            console.log("tokens generated successfully");
-            done(null, { user, token: tokens.accessToken, refreshToken: tokens.refreshToken });
+            
+            this.logger.log('=== Tokens Generated Successfully ===');
+            this.logger.log(`Access Token: ${tokens.accessToken.substring(0, 50)}...`);
+            this.logger.log(`Refresh Token: ${tokens.refreshToken.substring(0, 50)}...`);
+            this.logger.log(`Full Access Token: ${tokens.accessToken}`);
+            this.logger.log(`Full Refresh Token: ${tokens.refreshToken}`);
+            this.logger.log('====================================');
+            
+            // Check if this is a new user (created less than 1 minute ago)
+            const isNewUser = user.createdAt && 
+                (new Date().getTime() - new Date(user.createdAt).getTime()) < 60000;
+            
+            done(null, { 
+                user, 
+                token: tokens.accessToken, 
+                refreshToken: tokens.refreshToken,
+                isNewUser: isNewUser || false
+            });
         } catch (error) {
-            console.error('Google OAuth error:', error);
+            this.logger.error('=== Google OAuth Error ===');
+            this.logger.error(error.message);
+            this.logger.error(error.stack);
+            this.logger.error('==========================');
             done(error, false);
         }
     }

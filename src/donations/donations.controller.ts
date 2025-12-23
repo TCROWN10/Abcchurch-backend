@@ -16,13 +16,13 @@ const createDonationSchema = z.object({
 });
 
 @ApiTags('Donations')
-@ApiBearerAuth('JWT-auth')
 @Controller('donations')
-@UseGuards(JwtGuard)
 export class DonationsController {
   constructor(private readonly donationsService: DonationsService) {}
 
   @Post('create-checkout')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth('JWT-auth')
   @HttpCode(200)
   @ApiOperation({ summary: 'Create Stripe checkout session', description: 'Create a Stripe checkout session for donation payment' })
   @ApiBody({ schema: { example: { amount: 100, type: 'TITHE', currency: 'USD', isRecurring: false } } })
@@ -42,6 +42,8 @@ export class DonationsController {
   }
 
   @Get('my-donations')
+  @UseGuards(JwtGuard)
+  @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Get user donations', description: 'Get all donations made by the authenticated user' })
   @ApiQuery({ name: 'type', required: false, enum: ['TITHE', 'OFFERING', 'DONATION'], description: 'Filter by donation type' })
   @ApiQuery({ name: 'status', required: false, description: 'Filter by status (pending, completed, failed)' })
@@ -55,7 +57,8 @@ export class DonationsController {
   }
 
   @Get('all')
-  @UseGuards(RolesGuard)
+  @UseGuards(JwtGuard, RolesGuard)
+  @ApiBearerAuth('JWT-auth')
   @Roles(UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Get all donations (Super Admin only)', description: 'Get all donations in the system with filtering options' })
   @ApiQuery({ name: 'type', required: false, enum: ['TITHE', 'OFFERING', 'DONATION'] })
@@ -80,7 +83,8 @@ export class DonationsController {
   }
 
   @Get('stats')
-  @UseGuards(RolesGuard)
+  @UseGuards(JwtGuard, RolesGuard)
+  @ApiBearerAuth('JWT-auth')
   @Roles(UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Get donation statistics (Super Admin only)', description: 'Get aggregated donation statistics' })
   @ApiQuery({ name: 'startDate', required: false, type: String })
@@ -94,10 +98,47 @@ export class DonationsController {
     return buildAppResponse(stats, 'Donation statistics retrieved', 200, '/api/donations/stats');
   }
 
+  @Get('success')
+  @ApiOperation({ 
+    summary: 'Donation success callback (Public)', 
+    description: 'Verify and update donation status after successful Stripe payment. Called when user is redirected from Stripe. This is a PUBLIC endpoint - no authentication required.' 
+  })
+  @ApiQuery({ name: 'session_id', required: true, description: 'Stripe checkout session ID' })
+  @ApiResponse({ status: 200, description: 'Donation verified successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid session ID or donation not found' })
+  async handleSuccess(@Query('session_id') sessionId: string) {
+    try {
+      const result = await this.donationsService.verifyCheckoutSession(sessionId);
+      return buildAppResponse(result, 'Donation verified successfully', 200, '/api/donations/success');
+    } catch (error) {
+      return buildAppResponse(
+        { error: error.message, sessionId },
+        'Failed to verify donation',
+        400,
+        '/api/donations/success'
+      );
+    }
+  }
+
+  @Get('cancel')
+  @ApiOperation({ 
+    summary: 'Donation cancel callback (Public)', 
+    description: 'Handle when user cancels the Stripe checkout. Returns cancellation message. This is a PUBLIC endpoint - no authentication required.' 
+  })
+  @ApiResponse({ status: 200, description: 'Donation cancelled' })
+  async handleCancel() {
+    return buildAppResponse(
+      { message: 'Donation was cancelled. You can try again anytime.' },
+      'Donation cancelled',
+      200,
+      '/api/donations/cancel'
+    );
+  }
+
   @Get('webhook')
   @Post('webhook')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Stripe webhook endpoint', description: 'Handle Stripe webhook events (used by Stripe, not for direct API calls). Supports both GET and POST.' })
+  @ApiOperation({ summary: 'Stripe webhook endpoint (Public)', description: 'Handle Stripe webhook events (used by Stripe, not for direct API calls). This is a PUBLIC endpoint - no authentication required. Supports both GET and POST.' })
   @ApiResponse({ status: 200, description: 'Webhook received' })
   async handleWebhook(@Req() req: any, @Body() body?: any) {
     // Note: User requested GET, but Stripe typically sends POST

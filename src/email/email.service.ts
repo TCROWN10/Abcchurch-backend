@@ -29,12 +29,22 @@ export class EmailService {
     userId?: number;
   }) {
     try {
+      this.logger.log(`=== Sending Email ===`);
+      this.logger.log(`To: ${data.to}`);
+      this.logger.log(`Subject: ${data.subject}`);
+      this.logger.log(`Type: ${data.emailType}`);
+      
+      const fromEmail = this.configService.getOrThrow('MAILJET_FROM_EMAIL');
+      const fromName = this.configService.get('MAILJET_FROM_NAME') || 'ABC Church';
+      
+      this.logger.log(`From: ${fromEmail} (${fromName})`);
+      
       const result: any = await this.mailjet.post('send', { version: 'v3.1' }).request({
         Messages: [
           {
             From: {
-              Email: this.configService.getOrThrow('MAILJET_FROM_EMAIL'),
-              Name: this.configService.get('MAILJET_FROM_NAME', 'ABC Church'),
+              Email: fromEmail,
+              Name: fromName,
             },
             To: [
               {
@@ -47,6 +57,8 @@ export class EmailService {
           },
         ],
       });
+
+      this.logger.log(`Mailjet API Response: ${JSON.stringify(result.body)}`);
 
       const messageId = result.body?.Messages?.[0]?.To?.[0]?.MessageID || 'unknown';
 
@@ -63,22 +75,30 @@ export class EmailService {
         },
       });
 
-      this.logger.log(`Email sent to ${data.to}: ${messageId}`);
+      this.logger.log(`Email sent successfully to ${data.to}: ${messageId}`);
+      this.logger.log('=====================');
       return { success: true, messageId };
     } catch (error) {
-      this.logger.error(`Failed to send email to ${data.to}:`, error);
+      this.logger.error(`=== Failed to send email to ${data.to} ===`);
+      this.logger.error(`Error: ${error.message}`);
+      this.logger.error(`Stack: ${error.stack}`);
+      this.logger.error('==========================================');
 
       // Log failed email
-      await this.prisma.emailLog.create({
-        data: {
-          userId: data.userId,
-          recipientEmail: data.to,
-          subject: data.subject,
-          emailType: data.emailType,
-          status: 'failed',
-          errorMessage: error.message,
-        },
-      });
+      try {
+        await this.prisma.emailLog.create({
+          data: {
+            userId: data.userId,
+            recipientEmail: data.to,
+            subject: data.subject,
+            emailType: data.emailType,
+            status: 'failed',
+            errorMessage: error.message,
+          },
+        });
+      } catch (logError) {
+        this.logger.error(`Failed to log email error: ${logError.message}`);
+      }
 
       throw error;
     }
@@ -143,6 +163,36 @@ export class EmailService {
       subject: `Thank You for Your ${type}`,
       htmlContent,
       emailType: 'donation_confirmation',
+      userId,
+    });
+  }
+
+  async sendWelcomeEmail(userId: number, email: string, name: string) {
+    const htmlContent = `
+      <html>
+        <body>
+          <h2>Welcome to ABC Church, ${name}!</h2>
+          <p>We're thrilled to have you join our church family!</p>
+          <p>Your email has been successfully verified, and your account is now active.</p>
+          <p>You can now:</p>
+          <ul>
+            <li>Access all church resources and messages</li>
+            <li>Make donations and tithes</li>
+            <li>Submit prayer requests</li>
+            <li>Subscribe to our newsletter for updates</li>
+          </ul>
+          <p>If you have any questions or need assistance, please don't hesitate to reach out to us.</p>
+          <p>We look forward to seeing you at our services!</p>
+          <p>Blessings,<br>The ABC Church Family</p>
+        </body>
+      </html>
+    `;
+
+    return this.sendEmail({
+      to: email,
+      subject: 'Welcome to ABC Church!',
+      htmlContent,
+      emailType: 'welcome',
       userId,
     });
   }

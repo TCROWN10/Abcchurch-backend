@@ -211,7 +211,19 @@ export class EventHandlers {
   @OnEvent('email.otp')
   async handleOtpEmail(payload: Record<string, any>) {
     try {
+      this.logger.log('=== Handling email.otp Event ===');
+      this.logger.log(`Payload: ${JSON.stringify(payload)}`);
+      
       const { userId, email, otp } = payload;
+
+      if (!email || !otp) {
+        this.logger.error('Missing email or OTP in payload');
+        throw new Error('Missing email or OTP in payload');
+      }
+
+      this.logger.log(`Sending OTP email to: ${email}`);
+      this.logger.log(`OTP Code: ${otp}`);
+      this.logger.log(`User ID: ${userId}`);
 
       const htmlContent = `
         <html>
@@ -225,7 +237,7 @@ export class EventHandlers {
         </html>
       `;
 
-      await this.emailService.sendEmail({
+      const result = await this.emailService.sendEmail({
         to: email,
         subject: 'ABC Church - Email Verification Code',
         htmlContent,
@@ -233,9 +245,16 @@ export class EventHandlers {
         userId,
       });
 
-      this.logger.log(`OTP email sent to ${email}`);
+      this.logger.log(`=== OTP Email Sent Successfully ===`);
+      this.logger.log(`Email: ${email}`);
+      this.logger.log(`Message ID: ${result.messageId}`);
+      this.logger.log('===================================');
     } catch (error) {
-      this.logger.error(`Failed to send OTP email:`, error);
+      this.logger.error('=== Failed to send OTP email ===');
+      this.logger.error(`Error: ${error.message}`);
+      this.logger.error(`Stack: ${error.stack}`);
+      this.logger.error('================================');
+      throw error; // Re-throw to mark outbox event as failed
     }
   }
 
@@ -279,6 +298,59 @@ export class EventHandlers {
       this.logger.log(`Marked ${pendingDonations.length} pending donations as failed`);
     } catch (error) {
       this.logger.error(`Failed to check pending donations:`, error);
+    }
+  }
+
+  @OnEvent('auth.send-welcome')
+  async handleSendWelcome(payload: Record<string, any>) {
+    try {
+      const { userId, email, name } = payload;
+      
+      // Create outbox event to send welcome email asynchronously
+      await this.outboxService.createEvent({
+        eventType: 'email.welcome',
+        payload: {
+          userId,
+          email,
+          name,
+        },
+      });
+
+      this.logger.log(`Welcome email queued for user ${userId}`);
+    } catch (error) {
+      this.logger.error(`Failed to queue welcome email:`, error);
+    }
+  }
+
+  @OnEvent('email.welcome')
+  async handleWelcomeEmail(payload: Record<string, any>) {
+    try {
+      this.logger.log('=== Handling email.welcome Event ===');
+      this.logger.log(`Payload: ${JSON.stringify(payload)}`);
+      
+      const { userId, email, name } = payload;
+
+      if (!email || !name) {
+        this.logger.error('Missing email or name in welcome email payload');
+        throw new Error('Missing email or name in welcome email payload');
+      }
+
+      this.logger.log(`Sending welcome email to: ${email}`);
+      this.logger.log(`Name: ${name}`);
+      this.logger.log(`User ID: ${userId}`);
+
+      const result = await this.emailService.sendWelcomeEmail(userId, email, name);
+
+      this.logger.log(`=== Welcome Email Sent Successfully ===`);
+      this.logger.log(`Email: ${email}`);
+      this.logger.log(`Message ID: ${result.messageId}`);
+      this.logger.log('======================================');
+    } catch (error) {
+      this.logger.error('=== Failed to send welcome email ===');
+      this.logger.error(`Error: ${error.message}`);
+      this.logger.error(`Stack: ${error.stack}`);
+      this.logger.error('====================================');
+      throw error; // Re-throw to mark outbox event as failed
     }
   }
 
