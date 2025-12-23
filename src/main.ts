@@ -60,12 +60,18 @@ async function bootstrap() {
     .addTag('Prayer Requests', 'Prayer request submission and management')
     .addTag('Financial', 'Financial reporting and exports (Super Admin only)')
     .addTag('Analytics', 'Analytics and reporting endpoints')
-    .addTag('Users', 'User management endpoints')
-    .addServer('http://localhost:4000', 'Development server')
-    .addServer('https://api.yourchurch.com', 'Production server')
-    .build();
+    .addTag('Users', 'User management endpoints');
 
-  const document = SwaggerModule.createDocument(app, config);
+  // Add servers dynamically based on environment
+  const backendUrl = process.env.BACKEND_URL;
+  if (backendUrl) {
+    config.addServer(backendUrl, 'Production server');
+  }
+  config.addServer('http://localhost:4000', 'Development server');
+
+  const swaggerConfig = config.build();
+
+  const document = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup('api/docs', app, document, {
     swaggerOptions: {
       persistAuthorization: true,
