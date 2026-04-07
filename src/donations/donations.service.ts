@@ -1,9 +1,37 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { DonationType } from '@prisma/client';
 import Stripe from 'stripe';
 import { ConfigService } from '@nestjs/config';
 import { OutboxService } from 'src/outbox/outbox.service';
+
+export interface CheckoutSessionClientView {
+  id: string;
+  status: string;
+  payment_status: string;
+  amount_total: number | null;
+  currency: string | null;
+  customer_email: string | null;
+  mode: string;
+  metadata: Record<string, string>;
+  created: number;
+  formatted_amount: string | null;
+  line_items: Array<{
+    description: string | null;
+    amount_total: number | null;
+    formatted_amount: string | null;
+    quantity: number | null;
+  }>;
+  subscription: {
+    id: string;
+    status: string | null;
+    current_period_end: number | null;
+  } | null;
+  payment_intent: {
+    id: string;
+    status: string | null;
+  } | null;
+}
 
 @Injectable()
 export class DonationsService {
@@ -16,21 +44,129 @@ export class DonationsService {
     private readonly outboxService: OutboxService,
   ) {
     const stripeSecretKey = this.configService.getOrThrow('STRIPE_SECRET_KEY');
-    this.logger.log('=== Initializing Stripe ===');
-    this.logger.log(`Stripe Secret Key: ${stripeSecretKey.substring(0, 10)}...`);
-    
     try {
-      // Use the API version that matches the Stripe package version
-      // The package version determines the default API version
-      this.stripe = new Stripe(stripeSecretKey, {
-        apiVersion: '2025-12-15.clover',
-      });
+      this.stripe = new Stripe(stripeSecretKey);
       this.logger.log('Stripe initialized successfully');
     } catch (error) {
       this.logger.error(`Failed to initialize Stripe: ${error.message}`);
       this.logger.error(`Error stack: ${error.stack}`);
       throw error;
     }
+  }
+
+  private formatAmount(amountTotal: number | null, currency: string | null): string | null {
+    if (amountTotal == null || !currency) return null;
+    try {
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: currency.toUpperCase(),
+      }).format(amountTotal / 100);
+    } catch {
+      return `$${(amountTotal / 100).toFixed(2)}`;
+    }
+  }
+
+  private checkoutSessionToClientView(session: Stripe.Checkout.Session): CheckoutSessionClientView {
+    const md = session.metadata ?? {};
+    const meta: Record<string, string> = {};
+    for (const [k, v] of Object.entries(md)) {
+      if (v != null) meta[k] = String(v);
+    }
+
+    let paymentIntent: CheckoutSessionClientView['payment_intent'] = null;
+    if (session.payment_intent) {
+      if (typeof session.payment_intent === 'string') {
+        paymentIntent = { id: session.payment_intent, status: null };
+      } else {
+        paymentIntent = {
+          id: session.payment_intent.id,
+          status: session.payment_intent.status ?? null,
+        };
+      }
+    }
+
+    let subscription: CheckoutSessionClientView['subscription'] = null;
+    if (session.subscription) {
+      if (typeof session.subscription === 'string') {
+        subscription = { id: session.subscription, status: null, current_period_end: null };
+      } else {
+        subscription = {
+          id: session.subscription.id,
+          status: session.subscription.status ?? null,
+          current_period_end: session.subscription.current_period_end ?? null,
+        };
+      }
+    }
+
+    return {
+      id: session.id,
+      status: session.status ?? 'open',
+      payment_status: session.payment_status ?? 'unpaid',
+      amount_total: session.amount_total,
+      currency: session.currency,
+      customer_email: session.customer_email ?? session.customer_details?.email ?? null,
+      mode: session.mode,
+      metadata: meta,
+      created: session.created,
+      formatted_amount: this.formatAmount(session.amount_total, session.currency),
+      line_items: [],
+      subscription,
+      payment_intent: paymentIntent,
+    };
+  }
+
+  private async findOrCreateGuestUser(email: string, fullName?: string): Promise<number> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const existing = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+    if (existing) {
+      return existing.id;
+    }
+
+    const nameParts = (fullName ?? '').trim().split(/\s+/).filter(Boolean);
+    const firstName = nameParts[0] ?? 'Guest';
+    const lastName = nameParts.slice(1).join(' ') || 'Donor';
+
+    const details = await this.prisma.userDetails.create({
+      data: {
+        name: firstName,
+        lastName,
+      },
+    });
+
+    const created = await this.prisma.user.create({
+      data: {
+        email: normalizedEmail,
+        isEmailVerified: false,
+        detailsId: details.id,
+      },
+    });
+    return created.id;
+  }
+
+  async createGuestCheckoutSession(
+    guestEmail: string,
+    amount: number,
+    type: DonationType,
+    currency: string = 'USD',
+    isRecurring: boolean = false,
+    recurringPeriod?: string,
+    designation?: string,
+    displayCategory?: string,
+    guestName?: string,
+  ) {
+    const userId = await this.findOrCreateGuestUser(guestEmail, guestName);
+    return this.createCheckoutSession(
+      userId,
+      amount,
+      type,
+      currency,
+      isRecurring,
+      recurringPeriod,
+      designation,
+      displayCategory,
+    );
   }
 
   /**
@@ -43,14 +179,15 @@ export class DonationsService {
     currency: string = 'USD',
     isRecurring: boolean = false,
     recurringPeriod?: string,
+    designation?: string,
+    displayCategory?: string,
   ) {
     let donation;
-    
+
     try {
       this.logger.log(`=== Creating Checkout Session ===`);
       this.logger.log(`UserId: ${userId}, Amount: ${amount}, Type: ${type}, Currency: ${currency}`);
-      
-      // Check for duplicate donation within 1 hour (same user, same type)
+
       const oneHourAgo = new Date();
       oneHourAgo.setHours(oneHourAgo.getHours() - 1);
 
@@ -67,7 +204,6 @@ export class DonationsService {
       });
 
       if (existingDonation) {
-        // Update existing donation instead of creating new one
         this.logger.log(`Updating existing donation: ${existingDonation.id}`);
         donation = await this.prisma.donation.update({
           where: { id: existingDonation.id },
@@ -76,11 +212,11 @@ export class DonationsService {
             currency,
             isRecurring,
             recurringPeriod,
+            description: designation ?? existingDonation.description,
             updatedAt: new Date(),
           },
         });
       } else {
-        // Create new donation
         this.logger.log('Creating new donation record');
         donation = await this.prisma.donation.create({
           data: {
@@ -91,37 +227,56 @@ export class DonationsService {
             isRecurring,
             recurringPeriod,
             status: 'pending',
+            description: designation,
           },
         });
         this.logger.log(`Donation created in DB: ${donation.id}`);
       }
 
-      // Get user email for Stripe
       const user = await this.prisma.user.findUnique({ where: { id: userId } });
       if (!user) {
         throw new Error('User not found');
       }
 
-      const backendUrl = this.configService.get('BACKEND_URL') || 'http://localhost:4000';
-      const donationSuccessPath = this.configService.get('DONATION_SUCCESS_PATH') || '/api/donations/success';
-      const donationCancelPath = this.configService.get('DONATION_CANCEL_PATH') || '/api/donations/cancel';
-      
-      // Build success URL - point directly to backend
-      const successUrl = donationSuccessPath.startsWith('http') 
-        ? `${donationSuccessPath}?session_id={CHECKOUT_SESSION_ID}`
-        : `${backendUrl}${donationSuccessPath}?session_id={CHECKOUT_SESSION_ID}`;
-      
-      const cancelUrl = donationCancelPath.startsWith('http')
-        ? donationCancelPath
-        : `${backendUrl}${donationCancelPath}`;
-      
-      this.logger.log('Creating Stripe checkout session...');
-      this.logger.log(`Backend URL: ${backendUrl}`);
-      this.logger.log(`Success URL: ${successUrl}`);
-      this.logger.log(`Cancel URL: ${cancelUrl}`);
-      this.logger.log(`Mode: ${isRecurring ? 'subscription' : 'payment'}`);
-      
-      // Create Stripe checkout session
+      const frontendBase = (this.configService.get('FRONTEND_URL') || 'http://localhost:3000').replace(
+        /\/$/,
+        '',
+      );
+      const donationSuccessPath = this.configService.get<string>('DONATION_SUCCESS_PATH');
+      const donationCancelPath = this.configService.get<string>('DONATION_CANCEL_PATH');
+
+      const defaultSuccess = `${frontendBase}/donate/success?session_id={CHECKOUT_SESSION_ID}`;
+      const defaultCancel = `${frontendBase}/donate/cancel?session_id={CHECKOUT_SESSION_ID}`;
+
+      const withSessionPlaceholder = (base: string) =>
+        base.includes('{CHECKOUT_SESSION_ID}')
+          ? base
+          : `${base}${base.includes('?') ? '&' : '?'}session_id={CHECKOUT_SESSION_ID}`;
+
+      const successUrl = donationSuccessPath?.startsWith('http')
+        ? withSessionPlaceholder(donationSuccessPath)
+        : donationSuccessPath
+          ? withSessionPlaceholder(`${frontendBase}${donationSuccessPath.startsWith('/') ? '' : '/'}${donationSuccessPath}`)
+          : defaultSuccess;
+
+      const cancelUrl = donationCancelPath?.startsWith('http')
+        ? withSessionPlaceholder(donationCancelPath)
+        : donationCancelPath
+          ? withSessionPlaceholder(`${frontendBase}${donationCancelPath.startsWith('/') ? '' : '/'}${donationCancelPath}`)
+          : defaultCancel;
+
+      const recurringInterval: Stripe.PriceCreateParams.Recurring.Interval | undefined = isRecurring
+        ? recurringPeriod === 'weekly'
+          ? 'week'
+          : recurringPeriod === 'yearly'
+            ? 'year'
+            : 'month'
+        : undefined;
+
+      const productName = displayCategory
+        ? `${displayCategory} - ABC Church`
+        : `${type} - ABC Church`;
+
       const session = await this.stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         line_items: [
@@ -129,15 +284,18 @@ export class DonationsService {
             price_data: {
               currency: currency.toLowerCase(),
               product_data: {
-                name: `${type} - ABC Church`,
-                description: `Thank you for your ${type.toLowerCase()}`,
+                name: productName,
+                description: designation
+                  ? `Thank you for your ${type.toLowerCase()}: ${designation}`
+                  : `Thank you for your ${type.toLowerCase()}`,
               },
-              unit_amount: Math.round(amount * 100), // Convert to cents
-              ...(isRecurring && {
-                recurring: {
-                  interval: recurringPeriod === 'monthly' ? 'month' : 'week',
-                },
-              }),
+              unit_amount: Math.round(Number(amount) * 100),
+              ...(isRecurring &&
+                recurringInterval && {
+                  recurring: {
+                    interval: recurringInterval,
+                  },
+                }),
             },
             quantity: 1,
           },
@@ -146,32 +304,30 @@ export class DonationsService {
         success_url: successUrl,
         cancel_url: cancelUrl,
         metadata: {
-          donationId: donation.id.toString(),
+          donationId: donation.id,
           userId: userId.toString(),
           type,
+          category: displayCategory ?? type,
+          frequency: recurringPeriod ?? '',
         },
         customer_email: user.email,
       });
 
       this.logger.log(`Stripe session created: ${session.id}`);
-      this.logger.log(`Session URL: ${session.url}`);
 
-      // Update donation with Stripe session ID
       await this.prisma.donation.update({
         where: { id: donation.id },
         data: { stripeSessionId: session.id },
       });
 
       this.logger.log(`Donation ${donation.id} updated with Stripe session ID`);
-      this.logger.log('=== Checkout Session Created Successfully ===');
 
       return { sessionId: session.id, url: session.url, donationId: donation.id };
     } catch (error) {
       this.logger.error('=== Error Creating Checkout Session ===');
       this.logger.error(`Error: ${error.message}`);
       this.logger.error(`Stack: ${error.stack}`);
-      
-      // If donation was created but Stripe failed, mark it as failed
+
       if (donation) {
         this.logger.log(`Marking donation ${donation.id} as failed due to Stripe error`);
         try {
@@ -183,10 +339,28 @@ export class DonationsService {
           this.logger.error(`Failed to update donation status: ${updateError.message}`);
         }
       }
-      
-      this.logger.error('==========================================');
+
       throw error;
     }
+  }
+
+  async handleStripeWebhookFromRequest(rawBody: Buffer, signature: string | undefined): Promise<void> {
+    const webhookSecret = this.configService.get<string>('STRIPE_WEBHOOK_SECRET');
+    if (!webhookSecret) {
+      this.logger.error('STRIPE_WEBHOOK_SECRET is not configured');
+      throw new BadRequestException('Webhook is not configured');
+    }
+    if (!signature) {
+      throw new BadRequestException('Missing Stripe-Signature header');
+    }
+    let event: Stripe.Event;
+    try {
+      event = this.stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
+    } catch (err) {
+      this.logger.warn(`Webhook signature verification failed: ${err.message}`);
+      throw new BadRequestException('Invalid webhook signature');
+    }
+    await this.handleStripeWebhook(event);
   }
 
   /**
@@ -203,25 +377,36 @@ export class DonationsService {
       case 'invoice.payment_succeeded':
         await this.handleInvoicePaymentSucceeded(event.data.object as Stripe.Invoice);
         break;
+      default:
+        this.logger.debug(`Unhandled Stripe event type: ${event.type}`);
     }
+  }
+
+  private shouldMarkCheckoutCompleted(session: Stripe.Checkout.Session): boolean {
+    const status = session.payment_status;
+    if (status === 'paid' || status === 'no_payment_required') {
+      return true;
+    }
+    if (session.mode === 'subscription' && status === 'unpaid') {
+      return false;
+    }
+    return false;
   }
 
   /**
    * Handle checkout completed webhook event
-   * This is called by Stripe webhook (server-to-server) - more reliable than callback
    */
   private async handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     this.logger.log(`=== Handling checkout.completed webhook ===`);
     this.logger.log(`Session ID: ${session.id}`);
     this.logger.log(`Payment Status: ${session.payment_status}`);
-    
+
     const donationId = session.metadata?.donationId;
     if (!donationId) {
       this.logger.error('Donation ID not found in session metadata');
       return;
     }
 
-    // Check if donation already processed
     const existingDonation = await this.prisma.donation.findUnique({
       where: { id: donationId },
     });
@@ -236,6 +421,13 @@ export class DonationsService {
       return;
     }
 
+    if (!this.shouldMarkCheckoutCompleted(session)) {
+      this.logger.log(
+        `Checkout session ${session.id} payment_status=${session.payment_status}; not marking donation completed yet`,
+      );
+      return;
+    }
+
     let paymentIntent = '';
     if (session.payment_intent) {
       if (typeof session.payment_intent === 'string') {
@@ -245,21 +437,19 @@ export class DonationsService {
       }
     }
 
-    // Update donation status
     const donation = await this.prisma.donation.update({
       where: { id: donationId },
       data: {
-        stripePaymentId: paymentIntent,
+        stripePaymentId: paymentIntent || undefined,
         status: 'completed',
       },
     });
 
-    // Create outbox event for donation confirmation email
     await this.outboxService.createEvent({
       eventType: 'donation.completed',
       payload: {
         donationId: donationId,
-        userId: session.metadata?.userId || donation.userId,
+        userId: session.metadata?.userId || String(donation.userId),
         amount: Number(donation.amount),
         type: donation.type,
         timestamp: new Date().toISOString(),
@@ -270,12 +460,11 @@ export class DonationsService {
   }
 
   private async handlePaymentSucceeded(paymentIntent: Stripe.PaymentIntent) {
-    // Handle one-time payment
     const donation = await this.prisma.donation.findFirst({
       where: { stripePaymentId: paymentIntent.id },
     });
 
-    if (donation) {
+    if (donation && donation.status !== 'completed') {
       await this.prisma.donation.update({
         where: { id: donation.id },
         data: { status: 'completed' },
@@ -284,20 +473,16 @@ export class DonationsService {
   }
 
   private async handleInvoicePaymentSucceeded(invoice: Stripe.Invoice) {
-    // Handle recurring payment
-    // Note: invoice.subscription is a string ID or Subscription object
-    const subscriptionId = (invoice as any).subscription 
-      ? (typeof (invoice as any).subscription === 'string' 
-          ? (invoice as any).subscription 
-          : ((invoice as any).subscription as Stripe.Subscription)?.id || 'unknown')
-      : 'unknown';
-    // Find donation by subscription metadata or create new record
-    this.logger.log(`Recurring payment received for subscription: ${subscriptionId}`);
+    const subscriptionId = invoice.subscription
+      ? typeof invoice.subscription === 'string'
+        ? invoice.subscription
+        : invoice.subscription.id
+      : null;
+    this.logger.log(
+      `Recurring payment received for subscription: ${subscriptionId ?? 'unknown'} (invoice ${invoice.id})`,
+    );
   }
 
-  /**
-   * Get user donations
-   */
   async getUserDonations(userId: number, filters?: { type?: DonationType; status?: string }) {
     return this.prisma.donation.findMany({
       where: {
@@ -309,16 +494,13 @@ export class DonationsService {
     });
   }
 
-  /**
-   * Get all donations (Super Admin only)
-   */
   async getAllDonations(filters?: {
     type?: DonationType;
     status?: string;
     startDate?: Date;
     endDate?: Date;
   }) {
-    const where: any = {
+    const where: Record<string, unknown> = {
       ...(filters?.type && { type: filters.type }),
       ...(filters?.status && { status: filters.status }),
       ...(filters?.startDate &&
@@ -351,16 +533,35 @@ export class DonationsService {
   }
 
   /**
-   * Verify checkout session after successful payment
-   * Called when user is redirected from Stripe
+   * Public preview of a Checkout Session (success UI details or cancel page)
+   */
+  async getCheckoutSessionPreview(sessionId: string): Promise<CheckoutSessionClientView> {
+    const session = await this.stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ['line_items'],
+    });
+    const view = this.checkoutSessionToClientView(session);
+    if (session.line_items?.data?.length) {
+      view.line_items = session.line_items.data.map((item) => ({
+        description: item.description,
+        amount_total: item.amount_total,
+        formatted_amount: this.formatAmount(item.amount_total, session.currency),
+        quantity: item.quantity,
+      }));
+    }
+    return view;
+  }
+
+  /**
+   * Verify checkout session after successful payment (return trip from Stripe)
    */
   async verifyCheckoutSession(sessionId: string) {
     try {
       this.logger.log(`=== Verifying checkout session ===`);
       this.logger.log(`Session ID: ${sessionId}`);
 
-      // Retrieve the checkout session from Stripe
-      const session = await this.stripe.checkout.sessions.retrieve(sessionId);
+      const session = await this.stripe.checkout.sessions.retrieve(sessionId, {
+        expand: ['line_items'],
+      });
 
       if (!session) {
         throw new Error('Session not found');
@@ -369,13 +570,11 @@ export class DonationsService {
       this.logger.log(`Session status: ${session.payment_status}`);
       this.logger.log(`Session mode: ${session.mode}`);
 
-      // Get donation ID from metadata
       const donationId = session.metadata?.donationId;
       if (!donationId) {
         throw new Error('Donation ID not found in session metadata');
       }
 
-      // Find the donation (ID is UUID string in schema)
       const donation = await this.prisma.donation.findUnique({
         where: { id: donationId },
         include: { user: true },
@@ -385,8 +584,27 @@ export class DonationsService {
         throw new Error('Donation not found');
       }
 
-      // Update donation status based on payment status
-      if (session.payment_status === 'paid') {
+      const sessionView = this.checkoutSessionToClientView(session);
+      const lineItems = session.line_items;
+      if (lineItems && typeof lineItems === 'object' && 'data' in lineItems && Array.isArray(lineItems.data)) {
+        sessionView.line_items = lineItems.data.map((item) => ({
+          description: item.description,
+          amount_total: item.amount_total,
+          formatted_amount: this.formatAmount(item.amount_total, session.currency),
+          quantity: item.quantity,
+        }));
+      }
+
+      if (session.payment_status === 'paid' || session.payment_status === 'no_payment_required') {
+        if (donation.status === 'completed') {
+          return {
+            verified: true,
+            donationId: donation.id,
+            donationStatus: donation.status,
+            session: sessionView,
+          };
+        }
+
         let paymentIntent = '';
         if (session.payment_intent) {
           if (typeof session.payment_intent === 'string') {
@@ -400,11 +618,10 @@ export class DonationsService {
           where: { id: donation.id },
           data: {
             status: 'completed',
-            stripePaymentId: paymentIntent,
+            stripePaymentId: paymentIntent || donation.stripePaymentId,
           },
         });
 
-        // Create outbox event for donation confirmation email
         await this.outboxService.createEvent({
           eventType: 'donation.completed',
           payload: {
@@ -417,16 +634,20 @@ export class DonationsService {
         });
 
         this.logger.log(`Donation ${donation.id} verified and marked as completed`);
-      } else {
-        this.logger.log(`Payment status is ${session.payment_status}, donation remains pending`);
+        return {
+          verified: true,
+          donationId: donation.id,
+          donationStatus: 'completed' as const,
+          session: sessionView,
+        };
       }
 
+      this.logger.log(`Payment status is ${session.payment_status}, donation remains pending`);
       return {
+        verified: false,
         donationId: donation.id,
-        status: session.payment_status === 'paid' ? 'completed' : donation.status,
-        amount: Number(donation.amount),
-        type: donation.type,
-        sessionId: session.id,
+        donationStatus: donation.status,
+        session: sessionView,
       };
     } catch (error) {
       this.logger.error(`Failed to verify checkout session: ${error.message}`);
@@ -434,11 +655,8 @@ export class DonationsService {
     }
   }
 
-  /**
-   * Get donation statistics
-   */
   async getDonationStats(startDate?: Date, endDate?: Date) {
-    const where: any = {
+    const where: Record<string, unknown> = {
       status: 'completed',
       ...(startDate &&
         endDate && {
@@ -475,4 +693,3 @@ export class DonationsService {
     };
   }
 }
-

@@ -1,4 +1,16 @@
-import { Controller, Post, Get, Body, UseGuards, Req, Query, HttpCode } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  UseGuards,
+  Req,
+  Query,
+  HttpCode,
+  Headers,
+  BadRequestException,
+  RawBodyRequest,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { DonationsService } from './donations.service';
 import { JwtGuard } from 'src/guards/jwt.guard';
@@ -6,13 +18,21 @@ import { RolesGuard, Roles } from 'src/guards/roles.guard';
 import { UserRole, DonationType } from '@prisma/client';
 import { buildAppResponse } from 'src/utils/app_response.utils';
 import { z } from 'zod';
+import type { Request } from 'express';
 
 const createDonationSchema = z.object({
   amount: z.number().positive(),
   type: z.enum(['TITHE', 'OFFERING', 'DONATION']),
   currency: z.string().default('USD'),
   isRecurring: z.boolean().default(false),
-  recurringPeriod: z.enum(['monthly', 'weekly']).optional(),
+  recurringPeriod: z.enum(['monthly', 'weekly', 'yearly']).optional(),
+  designation: z.string().max(500).optional(),
+  displayCategory: z.string().max(120).optional(),
+});
+
+const createGuestDonationSchema = createDonationSchema.extend({
+  email: z.string().email(),
+  guestName: z.string().max(120).optional(),
 });
 
 @ApiTags('Donations')
@@ -24,12 +44,32 @@ export class DonationsController {
   @UseGuards(JwtGuard)
   @ApiBearerAuth('JWT-auth')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Create Stripe checkout session', description: 'Create a Stripe checkout session for donation payment' })
-  @ApiBody({ schema: { example: { amount: 100, type: 'TITHE', currency: 'USD', isRecurring: false } } })
+  @ApiOperation({
+    summary: 'Create Stripe checkout session',
+    description: 'Create a Stripe checkout session for donation payment (requires login)',
+  })
+  @ApiBody({
+    schema: {
+      example: {
+        amount: 50,
+        type: 'TITHE',
+        currency: 'USD',
+        isRecurring: false,
+        displayCategory: 'Tithes',
+      },
+    },
+  })
   @ApiResponse({ status: 200, description: 'Checkout session created successfully' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async createCheckout(@Req() req: any, @Body() body: z.infer<typeof createDonationSchema>) {
-    const validated = createDonationSchema.parse(body);
+  async createCheckout(@Req() req: { user: { id: number } }, @Body() body: unknown) {
+    const parsed = createDonationSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException({
+        message: 'Invalid donation payload',
+        issues: parsed.error.flatten(),
+      });
+    }
+    const validated = parsed.data;
     const result = await this.donationsService.createCheckoutSession(
       req.user.id,
       validated.amount,
@@ -37,8 +77,58 @@ export class DonationsController {
       validated.currency,
       validated.isRecurring,
       validated.recurringPeriod,
+      validated.designation,
+      validated.displayCategory,
     );
     return buildAppResponse(result, 'Checkout session created', 200, '/api/donations/create-checkout');
+  }
+
+  @Post('create-checkout-guest')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Create Stripe checkout session (Guest)',
+    description: 'Create a Stripe checkout session without authentication using guest email',
+  })
+  @ApiBody({
+    schema: {
+      example: {
+        email: 'guest@example.com',
+        guestName: 'Guest Donor',
+        amount: 50,
+        type: 'DONATION',
+        currency: 'USD',
+        isRecurring: false,
+        displayCategory: 'General Giving',
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Guest checkout session created successfully' })
+  async createGuestCheckout(@Body() body: unknown) {
+    const parsed = createGuestDonationSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException({
+        message: 'Invalid guest donation payload',
+        issues: parsed.error.flatten(),
+      });
+    }
+    const validated = parsed.data;
+    const result = await this.donationsService.createGuestCheckoutSession(
+      validated.email,
+      validated.amount,
+      validated.type as DonationType,
+      validated.currency,
+      validated.isRecurring,
+      validated.recurringPeriod,
+      validated.designation,
+      validated.displayCategory,
+      validated.guestName,
+    );
+    return buildAppResponse(
+      result,
+      'Guest checkout session created',
+      200,
+      '/api/donations/create-checkout-guest',
+    );
   }
 
   @Get('my-donations')
@@ -48,7 +138,11 @@ export class DonationsController {
   @ApiQuery({ name: 'type', required: false, enum: ['TITHE', 'OFFERING', 'DONATION'], description: 'Filter by donation type' })
   @ApiQuery({ name: 'status', required: false, description: 'Filter by status (pending, completed, failed)' })
   @ApiResponse({ status: 200, description: 'Donations retrieved successfully' })
-  async getMyDonations(@Req() req: any, @Query('type') type?: string, @Query('status') status?: string) {
+  async getMyDonations(
+    @Req() req: { user: { id: number } },
+    @Query('type') type?: string,
+    @Query('status') status?: string,
+  ) {
     const donations = await this.donationsService.getUserDonations(req.user.id, {
       type: type as DonationType,
       status,
@@ -60,7 +154,10 @@ export class DonationsController {
   @UseGuards(JwtGuard, RolesGuard)
   @ApiBearerAuth('JWT-auth')
   @Roles(UserRole.SUPER_ADMIN)
-  @ApiOperation({ summary: 'Get all donations (Super Admin only)', description: 'Get all donations in the system with filtering options' })
+  @ApiOperation({
+    summary: 'Get all donations (Super Admin only)',
+    description: 'Get all donations in the system with filtering options',
+  })
   @ApiQuery({ name: 'type', required: false, enum: ['TITHE', 'OFFERING', 'DONATION'] })
   @ApiQuery({ name: 'status', required: false })
   @ApiQuery({ name: 'startDate', required: false, type: String, example: '2024-01-01' })
@@ -86,7 +183,10 @@ export class DonationsController {
   @UseGuards(JwtGuard, RolesGuard)
   @ApiBearerAuth('JWT-auth')
   @Roles(UserRole.SUPER_ADMIN)
-  @ApiOperation({ summary: 'Get donation statistics (Super Admin only)', description: 'Get aggregated donation statistics' })
+  @ApiOperation({
+    summary: 'Get donation statistics (Super Admin only)',
+    description: 'Get aggregated donation statistics',
+  })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
   @ApiResponse({ status: 200, description: 'Statistics retrieved' })
@@ -98,32 +198,58 @@ export class DonationsController {
     return buildAppResponse(stats, 'Donation statistics retrieved', 200, '/api/donations/stats');
   }
 
+  @Get('checkout-session')
+  @ApiOperation({
+    summary: 'Get Stripe checkout session (Public)',
+    description:
+      'Returns session details for the thank-you or cancel page. Does not change donation status.',
+  })
+  @ApiQuery({ name: 'session_id', required: true, description: 'Stripe Checkout Session ID' })
+  @ApiResponse({ status: 200, description: 'Session retrieved' })
+  @ApiResponse({ status: 400, description: 'Invalid session ID' })
+  async getCheckoutSession(@Query('session_id') sessionId: string) {
+    if (!sessionId?.trim()) {
+      throw new BadRequestException('session_id is required');
+    }
+    const data = await this.donationsService.getCheckoutSessionPreview(sessionId.trim());
+    return buildAppResponse(data, 'Checkout session retrieved', 200, '/api/donations/checkout-session');
+  }
+
   @Get('success')
-  @ApiOperation({ 
-    summary: 'Donation success callback (Public)', 
-    description: 'Verify and update donation status after successful Stripe payment. Called when user is redirected from Stripe. This is a PUBLIC endpoint - no authentication required.' 
+  @ApiOperation({
+    summary: 'Donation success callback (Public)',
+    description:
+      'Verify and update donation status after successful Stripe payment. Called when user is redirected from Stripe.',
   })
   @ApiQuery({ name: 'session_id', required: true, description: 'Stripe checkout session ID' })
   @ApiResponse({ status: 200, description: 'Donation verified successfully' })
   @ApiResponse({ status: 400, description: 'Invalid session ID or donation not found' })
   async handleSuccess(@Query('session_id') sessionId: string) {
     try {
-      const result = await this.donationsService.verifyCheckoutSession(sessionId);
+      if (!sessionId?.trim()) {
+        return buildAppResponse(
+          { error: 'session_id is required' },
+          'Failed to verify donation',
+          400,
+          '/api/donations/success',
+        );
+      }
+      const result = await this.donationsService.verifyCheckoutSession(sessionId.trim());
       return buildAppResponse(result, 'Donation verified successfully', 200, '/api/donations/success');
     } catch (error) {
       return buildAppResponse(
         { error: error.message, sessionId },
         'Failed to verify donation',
         400,
-        '/api/donations/success'
+        '/api/donations/success',
       );
     }
   }
 
   @Get('cancel')
-  @ApiOperation({ 
-    summary: 'Donation cancel callback (Public)', 
-    description: 'Handle when user cancels the Stripe checkout. Returns cancellation message. This is a PUBLIC endpoint - no authentication required.' 
+  @ApiOperation({
+    summary: 'Donation cancel callback (Public)',
+    description: 'Handle when user cancels the Stripe checkout.',
   })
   @ApiResponse({ status: 200, description: 'Donation cancelled' })
   async handleCancel() {
@@ -131,28 +257,27 @@ export class DonationsController {
       { message: 'Donation was cancelled. You can try again anytime.' },
       'Donation cancelled',
       200,
-      '/api/donations/cancel'
+      '/api/donations/cancel',
     );
   }
 
-  @Get('webhook')
   @Post('webhook')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Stripe webhook endpoint (Public)', description: 'Handle Stripe webhook events (used by Stripe, not for direct API calls). This is a PUBLIC endpoint - no authentication required. Supports both GET and POST.' })
+  @ApiOperation({
+    summary: 'Stripe webhook endpoint',
+    description:
+      'Stripe sends signed POST requests here. Configure STRIPE_WEBHOOK_SECRET and point Stripe to {BACKEND_URL}/api/donations/webhook',
+  })
   @ApiResponse({ status: 200, description: 'Webhook received' })
-  async handleWebhook(@Req() req: any, @Body() body?: any) {
-    // Note: User requested GET, but Stripe typically sends POST
-    // Support both: GET reads from query, POST reads from body
-    const eventData = req.method === 'GET' ? req.query.event : (body || req.body);
-    
-    // Verify webhook signature in production
-    // const sig = req.headers['stripe-signature'];
-    // const stripeSecret = process.env.STRIPE_WEBHOOK_SECRET;
-    // const event = this.stripe.webhooks.constructEvent(req.body, sig, stripeSecret);
-    
-    // For now, handle directly
-    await this.donationsService.handleStripeWebhook(eventData);
+  async handleWebhook(
+    @Req() req: RawBodyRequest<Request>,
+    @Headers('stripe-signature') signature: string | undefined,
+  ) {
+    const rawBody = req.rawBody;
+    if (!rawBody) {
+      throw new BadRequestException('Missing raw body (ensure Nest rawBody is enabled)');
+    }
+    await this.donationsService.handleStripeWebhookFromRequest(rawBody, signature);
     return { received: true };
   }
 }
-
