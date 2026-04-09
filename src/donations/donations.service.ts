@@ -90,10 +90,13 @@ export class DonationsService {
       if (typeof session.subscription === 'string') {
         subscription = { id: session.subscription, status: null, current_period_end: null };
       } else {
+        const sub = session.subscription as Stripe.Subscription & {
+          current_period_end?: number | null;
+        };
         subscription = {
-          id: session.subscription.id,
-          status: session.subscription.status ?? null,
-          current_period_end: session.subscription.current_period_end ?? null,
+          id: sub.id,
+          status: sub.status ?? null,
+          current_period_end: sub.current_period_end ?? null,
         };
       }
     }
@@ -473,10 +476,13 @@ export class DonationsService {
   }
 
   private async handleInvoicePaymentSucceeded(invoice: Stripe.Invoice) {
-    const subscriptionId = invoice.subscription
-      ? typeof invoice.subscription === 'string'
-        ? invoice.subscription
-        : invoice.subscription.id
+    const inv = invoice as Stripe.Invoice & {
+      subscription?: string | Stripe.Subscription | null;
+    };
+    const subscriptionId = inv.subscription
+      ? typeof inv.subscription === 'string'
+        ? inv.subscription
+        : inv.subscription.id
       : null;
     this.logger.log(
       `Recurring payment received for subscription: ${subscriptionId ?? 'unknown'} (invoice ${invoice.id})`,

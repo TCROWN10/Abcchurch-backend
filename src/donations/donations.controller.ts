@@ -9,8 +9,8 @@ import {
   HttpCode,
   Headers,
   BadRequestException,
-  RawBodyRequest,
 } from '@nestjs/common';
+import type { RawBodyRequest } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { DonationsService } from './donations.service';
 import { JwtGuard } from 'src/guards/jwt.guard';
