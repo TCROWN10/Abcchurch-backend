@@ -5,6 +5,25 @@ import Stripe from 'stripe';
 import { ConfigService } from '@nestjs/config';
 import { OutboxService } from 'src/outbox/outbox.service';
 
+/**
+ * Stripe SDK types omit `current_period_end` on Subscription in newer API versions; the field may
+ * still be present at runtime or live on subscription items. See stripe-node#2353.
+ */
+function stripeSubscriptionCurrentPeriodEnd(sub: unknown): Date | null {
+  const raw = sub as {
+    current_period_end?: number;
+    items?: { data?: Array<{ current_period_end?: number }> };
+  };
+  if (typeof raw.current_period_end === 'number') {
+    return new Date(raw.current_period_end * 1000);
+  }
+  const fromItem = raw.items?.data?.[0]?.current_period_end;
+  if (typeof fromItem === 'number') {
+    return new Date(fromItem * 1000);
+  }
+  return null;
+}
+
 export interface CheckoutSessionClientView {
   id: string;
   status: string;
@@ -573,8 +592,7 @@ export class DonationsService {
     } else if (sub.customer && typeof sub.customer !== 'string') {
       customerId = sub.customer.id;
     }
-    const periodEnd =
-      sub.current_period_end != null ? new Date(sub.current_period_end * 1000) : null;
+    const periodEnd = stripeSubscriptionCurrentPeriodEnd(sub);
     await this.prisma.donation.update({
       where: { id: donationId },
       data: {
@@ -588,10 +606,7 @@ export class DonationsService {
   }
 
   private async handleSubscriptionUpdated(subscription: Stripe.Subscription) {
-    const periodEnd =
-      subscription.current_period_end != null
-        ? new Date(subscription.current_period_end * 1000)
-        : null;
+    const periodEnd = stripeSubscriptionCurrentPeriodEnd(subscription);
     const result = await this.prisma.donation.updateMany({
       where: { stripeSubscriptionId: subscription.id },
       data: {
