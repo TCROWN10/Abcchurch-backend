@@ -29,6 +29,8 @@ const createDonationSchema = z.object({
   recurringPeriod: z.enum(['monthly', 'weekly', 'yearly']).optional(),
   designation: z.string().max(500).optional(),
   displayCategory: z.string().max(120).optional(),
+  /** Browser origin (e.g. https://yourchurch.org) — must be listed in FRONTEND_URL allowlist */
+  clientOrigin: z.string().url().max(512).optional(),
 });
 
 const createGuestDonationSchema = createDonationSchema.extend({
@@ -80,6 +82,7 @@ export class DonationsController {
       validated.recurringPeriod,
       validated.designation,
       validated.displayCategory,
+      validated.clientOrigin,
     );
     return buildAppResponse(result, 'Checkout session created', 200, '/api/donations/create-checkout');
   }
@@ -123,6 +126,7 @@ export class DonationsController {
       validated.designation,
       validated.displayCategory,
       validated.guestName,
+      validated.clientOrigin,
     );
     return buildAppResponse(
       result,

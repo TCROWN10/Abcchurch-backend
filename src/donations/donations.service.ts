@@ -193,6 +193,7 @@ export class DonationsService {
     designation?: string,
     displayCategory?: string,
     guestName?: string,
+    clientOrigin?: string,
   ) {
     const userId = await this.findOrCreateGuestUser(guestEmail, guestName);
     return this.createCheckoutSession(
@@ -204,12 +205,53 @@ export class DonationsService {
       recurringPeriod,
       designation,
       displayCategory,
+      clientOrigin,
     );
   }
 
   /**
    * Create a Stripe checkout session for donation
    */
+  /**
+   * Normalize origin for comparison (scheme + host, no trailing slash, no path).
+   */
+  private normalizeSiteOrigin(raw: string): string {
+    const trimmed = raw.trim().replace(/\/+$/, '');
+    const withProto = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    try {
+      const u = new URL(withProto);
+      return `${u.protocol}//${u.host}`.toLowerCase();
+    } catch {
+      return trimmed.toLowerCase();
+    }
+  }
+
+  private getAllowedFrontendOrigins(): string[] {
+    const raw =
+      this.configService.get<string>('FRONTEND_URL')?.trim() || 'http://localhost:3000';
+    const parts = raw.split(',').map((s) => this.normalizeSiteOrigin(s)).filter(Boolean);
+    return parts.length > 0 ? parts : ['http://localhost:3000'];
+  }
+
+  /**
+   * Base URL for Stripe success/cancel redirects. Uses clientOrigin when it matches FRONTEND_URL
+   * (comma-separated allowlist); otherwise the first allowed origin.
+   */
+  private resolveCheckoutFrontendBase(clientOrigin?: string): string {
+    const allowed = this.getAllowedFrontendOrigins();
+    if (clientOrigin?.trim()) {
+      const norm = this.normalizeSiteOrigin(clientOrigin);
+      const hit = allowed.find((a) => a === norm);
+      if (hit) {
+        return hit.replace(/\/+$/, '');
+      }
+      throw new BadRequestException(
+        `clientOrigin is not allowed for checkout redirects. Add "${norm}" to FRONTEND_URL (comma-separated list of site origins).`,
+      );
+    }
+    return allowed[0].replace(/\/+$/, '');
+  }
+
   async createCheckoutSession(
     userId: number,
     amount: number,
@@ -219,6 +261,7 @@ export class DonationsService {
     recurringPeriod?: string,
     designation?: string,
     displayCategory?: string,
+    clientOrigin?: string,
   ) {
     let donation;
 
@@ -300,10 +343,7 @@ export class DonationsService {
         throw new Error('User not found');
       }
 
-      const frontendBase = (this.configService.get('FRONTEND_URL') || 'http://localhost:3000').replace(
-        /\/$/,
-        '',
-      );
+      const frontendBase = this.resolveCheckoutFrontendBase(clientOrigin);
       const donationSuccessPath = this.configService.get<string>('DONATION_SUCCESS_PATH');
       const donationCancelPath = this.configService.get<string>('DONATION_CANCEL_PATH');
 
