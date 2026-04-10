@@ -2,21 +2,38 @@ import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from
 import { buildErrorResponse, ErrorResponse } from './error_reponse.error';
 import { buildAppResponse } from 'src/utils/app_response.utils';
 import { BaseError } from '../base_error.exception';
+import type { Response } from 'express';
+
+function messageFromHttpException(exception: HttpException): string {
+  const body = exception.getResponse();
+  if (typeof body === 'string') {
+    return body;
+  }
+  if (body && typeof body === 'object' && 'message' in body) {
+    const m = (body as { message: unknown }).message;
+    if (Array.isArray(m)) {
+      return m.map(String).join(', ');
+    }
+    if (typeof m === 'string') {
+      return m;
+    }
+  }
+  return exception.message;
+}
 
 @Catch()
 export class GlobalExceptionFilter<T> implements ExceptionFilter {
   catch(exception: T, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
-    const response = ctx.getResponse();
+    const response = ctx.getResponse<Response>();
     const request = ctx.getRequest();
     let message: string;
     let status: number;
-    
+
     if (exception instanceof HttpException) {
-      message = exception.message;
+      message = messageFromHttpException(exception);
       status = exception.getStatus();
-    } 
-    else if (exception instanceof BaseError) {
+    } else if (exception instanceof BaseError) {
       message = exception.message;
       status = exception.getStatus();
     } else {
@@ -25,15 +42,14 @@ export class GlobalExceptionFilter<T> implements ExceptionFilter {
     }
 
     const errorResponse = buildErrorResponse(status, message, request.url);
-    
-    const appResponse = buildAppResponse<ErrorResponse>
-    (
+
+    const appResponse = buildAppResponse<ErrorResponse>(
       errorResponse,
       message,
       status,
-      request.url
+      request.url,
     );
 
-    response.json(appResponse);
+    response.status(status).json(appResponse);
   }
 }

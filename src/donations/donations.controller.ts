@@ -9,6 +9,7 @@ import {
   HttpCode,
   Headers,
   BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
@@ -196,6 +197,47 @@ export class DonationsController {
       endDate ? new Date(endDate) : undefined,
     );
     return buildAppResponse(stats, 'Donation statistics retrieved', 200, '/api/donations/stats');
+  }
+
+  @Get('subscriptions')
+  @UseGuards(JwtGuard, RolesGuard)
+  @ApiBearerAuth('JWT-auth')
+  @Roles(UserRole.SUPER_ADMIN)
+  @ApiOperation({
+    summary: 'List recurring donation subscriptions (Super Admin)',
+    description:
+      'Returns Stripe-linked recurring donations from the database. Optional `subscriptionId` returns a single row by Stripe subscription id (legacy compat with Next `/api/subscriptions`).',
+  })
+  @ApiQuery({ name: 'subscriptionId', required: false, description: 'Stripe subscription id (e.g. sub_...)' })
+  @ApiQuery({ name: 'status', required: false, description: 'Filter by Stripe subscription status' })
+  @ApiQuery({ name: 'category', required: false, description: 'Filter by display category (metadata)' })
+  @ApiQuery({ name: 'customerEmail', required: false, description: 'Filter by donor email (contains)' })
+  @ApiResponse({ status: 200, description: 'Subscriptions retrieved' })
+  @ApiResponse({ status: 404, description: 'Subscription not found (when subscriptionId is set)' })
+  async listSubscriptions(
+    @Query('subscriptionId') subscriptionId?: string,
+    @Query('status') status?: string,
+    @Query('category') category?: string,
+    @Query('customerEmail') customerEmail?: string,
+  ) {
+    if (subscriptionId?.trim()) {
+      const row = await this.donationsService.getDonationSubscriptionByStripeId(subscriptionId.trim());
+      if (!row) {
+        throw new NotFoundException('Subscription not found');
+      }
+      return buildAppResponse(row, 'Subscription retrieved', 200, '/api/donations/subscriptions');
+    }
+    const { records, total } = await this.donationsService.listDonationSubscriptions({
+      status,
+      category,
+      customerEmail,
+    });
+    return buildAppResponse(
+      { data: records, total },
+      'Subscriptions retrieved',
+      200,
+      '/api/donations/subscriptions',
+    );
   }
 
   @Get('checkout-session')

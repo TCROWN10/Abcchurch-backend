@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { DonationType } from '@prisma/client';
+import { DonationType, Prisma } from '@prisma/client';
 import Stripe from 'stripe';
 import { ConfigService } from '@nestjs/config';
 import { OutboxService } from 'src/outbox/outbox.service';
@@ -31,6 +31,22 @@ export interface CheckoutSessionClientView {
     id: string;
     status: string | null;
   } | null;
+}
+
+/** Recurring donation row (aligned with legacy Next `/api/subscriptions` shape). */
+export interface DonationSubscriptionRow {
+  id: string;
+  stripeSubscriptionId: string;
+  stripeCustomerId: string;
+  amount: number;
+  currency: string;
+  category: string;
+  frequency: string;
+  status: string;
+  customerEmail: string;
+  createdAt: string;
+  updatedAt: string;
+  nextPaymentDate: string | null;
 }
 
 @Injectable()
@@ -208,19 +224,42 @@ export class DonationsService {
 
       if (existingDonation) {
         this.logger.log(`Updating existing donation: ${existingDonation.id}`);
+        const prevMeta = (existingDonation.metadata as Record<string, string> | null) ?? {};
+        const meta: Record<string, string> = { ...prevMeta };
+        if (displayCategory) {
+          meta.displayCategory = displayCategory;
+        }
+        if (designation !== undefined) {
+          if (designation) {
+            meta.designation = designation;
+          } else {
+            delete meta.designation;
+          }
+        }
+        const updateData: Prisma.DonationUpdateInput = {
+          amount,
+          currency,
+          isRecurring,
+          recurringPeriod,
+          description: designation ?? existingDonation.description,
+          updatedAt: new Date(),
+        };
+        if (Object.keys(meta).length > 0) {
+          updateData.metadata = meta;
+        }
         donation = await this.prisma.donation.update({
           where: { id: existingDonation.id },
-          data: {
-            amount,
-            currency,
-            isRecurring,
-            recurringPeriod,
-            description: designation ?? existingDonation.description,
-            updatedAt: new Date(),
-          },
+          data: updateData,
         });
       } else {
         this.logger.log('Creating new donation record');
+        const initialMeta: Record<string, string> = {};
+        if (displayCategory) {
+          initialMeta.displayCategory = displayCategory;
+        }
+        if (designation) {
+          initialMeta.designation = designation;
+        }
         donation = await this.prisma.donation.create({
           data: {
             userId,
@@ -231,6 +270,7 @@ export class DonationsService {
             recurringPeriod,
             status: 'pending',
             description: designation,
+            ...(Object.keys(initialMeta).length > 0 && { metadata: initialMeta }),
           },
         });
         this.logger.log(`Donation created in DB: ${donation.id}`);
@@ -380,6 +420,12 @@ export class DonationsService {
       case 'invoice.payment_succeeded':
         await this.handleInvoicePaymentSucceeded(event.data.object as Stripe.Invoice);
         break;
+      case 'customer.subscription.updated':
+        await this.handleSubscriptionUpdated(event.data.object as Stripe.Subscription);
+        break;
+      case 'customer.subscription.deleted':
+        await this.handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
+        break;
       default:
         this.logger.debug(`Unhandled Stripe event type: ${event.type}`);
     }
@@ -420,6 +466,17 @@ export class DonationsService {
     }
 
     if (existingDonation.status === 'completed') {
+      if (
+        session.mode === 'subscription' &&
+        !existingDonation.stripeSubscriptionId &&
+        this.shouldMarkCheckoutCompleted(session)
+      ) {
+        try {
+          await this.enrichDonationWithStripeSubscription(session, donationId);
+        } catch (e) {
+          this.logger.error(`Failed to backfill subscription for donation ${donationId}: ${e.message}`);
+        }
+      }
       this.logger.log(`Donation ${donationId} already completed, skipping webhook processing`);
       return;
     }
@@ -447,6 +504,14 @@ export class DonationsService {
         status: 'completed',
       },
     });
+
+    if (session.mode === 'subscription') {
+      try {
+        await this.enrichDonationWithStripeSubscription(session, donationId);
+      } catch (e) {
+        this.logger.error(`Failed to attach subscription to donation ${donationId}: ${e.message}`);
+      }
+    }
 
     await this.outboxService.createEvent({
       eventType: 'donation.completed',
@@ -487,6 +552,131 @@ export class DonationsService {
     this.logger.log(
       `Recurring payment received for subscription: ${subscriptionId ?? 'unknown'} (invoice ${invoice.id})`,
     );
+  }
+
+  private async enrichDonationWithStripeSubscription(session: Stripe.Checkout.Session, donationId: string) {
+    if (session.mode !== 'subscription') {
+      return;
+    }
+    const subRef = session.subscription;
+    if (!subRef) {
+      this.logger.warn(`Checkout session ${session.id} is subscription mode but has no subscription id`);
+      return;
+    }
+    const subId = typeof subRef === 'string' ? subRef : subRef.id;
+    const sub = await this.stripe.subscriptions.retrieve(subId);
+    let customerId: string | undefined;
+    if (session.customer) {
+      customerId = typeof session.customer === 'string' ? session.customer : session.customer.id;
+    } else if (typeof sub.customer === 'string') {
+      customerId = sub.customer;
+    } else if (sub.customer && typeof sub.customer !== 'string') {
+      customerId = sub.customer.id;
+    }
+    const periodEnd =
+      sub.current_period_end != null ? new Date(sub.current_period_end * 1000) : null;
+    await this.prisma.donation.update({
+      where: { id: donationId },
+      data: {
+        stripeSubscriptionId: sub.id,
+        stripeCustomerId: customerId ?? null,
+        subscriptionStatus: sub.status,
+        subscriptionCurrentPeriodEnd: periodEnd,
+      },
+    });
+    this.logger.log(`Donation ${donationId} linked to subscription ${sub.id}`);
+  }
+
+  private async handleSubscriptionUpdated(subscription: Stripe.Subscription) {
+    const periodEnd =
+      subscription.current_period_end != null
+        ? new Date(subscription.current_period_end * 1000)
+        : null;
+    const result = await this.prisma.donation.updateMany({
+      where: { stripeSubscriptionId: subscription.id },
+      data: {
+        subscriptionStatus: subscription.status,
+        subscriptionCurrentPeriodEnd: periodEnd,
+      },
+    });
+    if (result.count === 0) {
+      this.logger.debug(`No donation row for subscription ${subscription.id} (update ignored)`);
+    }
+  }
+
+  private async handleSubscriptionDeleted(subscription: Stripe.Subscription) {
+    await this.prisma.donation.updateMany({
+      where: { stripeSubscriptionId: subscription.id },
+      data: { subscriptionStatus: 'canceled' },
+    });
+  }
+
+  private toSubscriptionRow(
+    d: Prisma.DonationGetPayload<{ include: { user: { select: { email: true } } } }>,
+  ): DonationSubscriptionRow {
+    const meta = (d.metadata as { displayCategory?: string } | null) ?? {};
+    const category = meta.displayCategory ?? d.type;
+    return {
+      id: d.id,
+      stripeSubscriptionId: d.stripeSubscriptionId!,
+      stripeCustomerId: d.stripeCustomerId ?? '',
+      amount: Number(d.amount),
+      currency: d.currency.toLowerCase(),
+      category,
+      frequency: d.recurringPeriod ?? '',
+      status: d.subscriptionStatus ?? 'active',
+      customerEmail: d.user.email,
+      createdAt: d.createdAt.toISOString(),
+      updatedAt: d.updatedAt.toISOString(),
+      nextPaymentDate: d.subscriptionCurrentPeriodEnd?.toISOString() ?? null,
+    };
+  }
+
+  async listDonationSubscriptions(filters?: {
+    status?: string;
+    category?: string;
+    customerEmail?: string;
+  }): Promise<{ records: DonationSubscriptionRow[]; total: number }> {
+    const where: Prisma.DonationWhereInput = {
+      stripeSubscriptionId: { not: null },
+    };
+    if (filters?.status?.trim()) {
+      const s = filters.status.trim().toLowerCase();
+      if (s === 'cancelled' || s === 'canceled') {
+        where.subscriptionStatus = { in: ['canceled', 'cancelled'] };
+      } else {
+        where.subscriptionStatus = filters.status;
+      }
+    }
+    if (filters?.customerEmail?.trim()) {
+      where.user = { email: { contains: filters.customerEmail.trim(), mode: 'insensitive' } };
+    }
+    const rows = await this.prisma.donation.findMany({
+      where,
+      include: {
+        user: { select: { email: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    let mapped = rows.map((d) => this.toSubscriptionRow(d));
+    if (filters?.category?.trim()) {
+      const c = filters.category.trim().toLowerCase();
+      mapped = mapped.filter((r) => r.category.toLowerCase() === c);
+    }
+    return { records: mapped, total: mapped.length };
+  }
+
+  async getDonationSubscriptionByStripeId(
+    stripeSubscriptionId: string,
+  ): Promise<DonationSubscriptionRow | null> {
+    const d = await this.prisma.donation.findUnique({
+      where: { stripeSubscriptionId },
+      include: { user: { select: { email: true } } },
+    });
+    if (!d?.stripeSubscriptionId) {
+      return null;
+    }
+    return this.toSubscriptionRow(d);
   }
 
   async getUserDonations(userId: number, filters?: { type?: DonationType; status?: string }) {
@@ -603,6 +793,13 @@ export class DonationsService {
 
       if (session.payment_status === 'paid' || session.payment_status === 'no_payment_required') {
         if (donation.status === 'completed') {
+          if (session.mode === 'subscription' && !donation.stripeSubscriptionId) {
+            try {
+              await this.enrichDonationWithStripeSubscription(session, donation.id);
+            } catch (e) {
+              this.logger.error(`Failed to backfill subscription for donation ${donation.id}: ${e.message}`);
+            }
+          }
           return {
             verified: true,
             donationId: donation.id,
@@ -627,6 +824,14 @@ export class DonationsService {
             stripePaymentId: paymentIntent || donation.stripePaymentId,
           },
         });
+
+        if (session.mode === 'subscription') {
+          try {
+            await this.enrichDonationWithStripeSubscription(session, donation.id);
+          } catch (e) {
+            this.logger.error(`Failed to attach subscription to donation ${donation.id}: ${e.message}`);
+          }
+        }
 
         await this.outboxService.createEvent({
           eventType: 'donation.completed',

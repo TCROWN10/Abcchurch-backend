@@ -115,6 +115,10 @@ model Donation {
   currency        String       @default("USD")
   stripePaymentId String?      @unique
   stripeSessionId String?
+  stripeSubscriptionId String? @unique
+  stripeCustomerId   String?
+  subscriptionStatus          String? // Stripe subscription.status (active, canceled, past_due, …)
+  subscriptionCurrentPeriodEnd DateTime?
   description     String?
   isRecurring     Boolean      @default(false)
   recurringPeriod String? // monthly, weekly, etc.
@@ -128,6 +132,7 @@ model Donation {
   @@index([status])
   @@index([createdAt])
   @@index([stripePaymentId])
+  @@index([stripeSubscriptionId])
 }
 
 // Messages (Sunday/Weekday)
